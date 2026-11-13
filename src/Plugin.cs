@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "0.11.0";
+        public const string Version = "0.11.1";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
@@ -102,9 +102,9 @@ namespace MaydayCareer
             DamageKey = Config.Bind(
                 "Debug",
                 "DamageKey",
-                "",
+                "F7",
                 "调试用：按这个键在机身上打一个洞，用来复现没法等到的随机损伤。\n" +
-                "留空 = 关闭（默认）。填 F7 之类不冲突的键即可启用。\n" +
+                "留空 = 关闭。默认 F7，嫌碍事就清空。\n" +
                 "打洞走游戏自己的 HullPanels.ServerBlowAt，日志会 dump 洞的坐标与 jetHp。");
 
             SaveItems = Config.Bind(

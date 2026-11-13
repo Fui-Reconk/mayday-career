@@ -80,6 +80,7 @@ namespace MaydayCareer
 
             PollLoad(kb);
             PollSave(kb);
+            PollDamage(kb);
         }
 
         static void PollLoad(UnityEngine.InputSystem.Keyboard kb)
