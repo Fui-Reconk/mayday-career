@@ -2,7 +2,7 @@
 
 《Mayday Airways》的跨局进度存档插件 —— 每趟航班结束后把公司状态落成一份 JSON，下次启动接着上次飞。
 
-[快速开始](#快速开始) · [安装](#安装) · [配置](#配置) · [存档](#存档文件) · [从源码构建](#从源码构建) · [常见问题](#常见问题) · [逆向笔记](docs/FINDINGS.md) · [更新记录](CHANGELOG.md) · [发布包](https://github.com/Fui-Reconk/mayday-career/releases/latest)
+[快速开始](#快速开始) · [安装](#安装) · [配置](#配置) · [存档](#存档文件) · [从源码构建](#从源码构建) · [常见问题](#常见问题) · [逆向笔记](docs/FINDINGS.md) · [参与开发](CONTRIBUTING.md) · [更新记录](CHANGELOG.md) · [发布包](https://github.com/Fui-Reconk/mayday-career/releases/latest)
 
 ---
 
