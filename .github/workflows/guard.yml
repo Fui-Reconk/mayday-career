@@ -1,0 +1,74 @@
+name: guard
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # 仓库里绝不能出现游戏派生物：BepInEx 运行时、interop 程序集、
+  # 由游戏代码生成的 dll，以及任何打包产物。这条检查在 PR 和 push 上都会跑。
+  no-game-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 检查改动里是否混入游戏派生物或构建产物
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            FILES=$(git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}"...HEAD)
+          else
+            FILES=$(git diff --name-only --diff-filter=ACMR HEAD^ HEAD || true)
+          fi
+
+          echo "改动文件："
+          echo "${FILES:-（无）}"
+
+          BAD=$(echo "$FILES" | grep -Ei \
+            '(^|/)(BepInEx|interop|dist|bin|obj)/|\.(dll|pdb|zip|7z|rar|dat|bundle|assets)$|global-metadata|GameAssembly' \
+            || true)
+
+          if [ -n "$BAD" ]; then
+            echo "::error::以下文件属于游戏派生物或构建产物，不能进版本库："
+            echo "$BAD"
+            echo "（如果只是误加，git rm --cached 并补进 .gitignore）"
+            exit 1
+          fi
+          echo "OK：没有任何游戏派生物"
+
+  # 版本号在三个地方出现：VERSION 文件、Plugin.cs 的常量、CHANGELOG 的标题。
+  # 三者对不上会让使用者分不清自己装的是哪一版，所以强制一致。
+  version-consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: VERSION 与 Plugin.cs 是否一致
+        run: |
+          set -e
+          V=$(tr -d ' \r\n' < VERSION)
+          echo "VERSION = $V"
+          if ! grep -q "Version = \"$V\"" src/Plugin.cs; then
+            echo "::error::src/Plugin.cs 里的 Version 常量与 VERSION 文件不一致"
+            grep -n 'const string Version' src/Plugin.cs || true
+            exit 1
+          fi
+
+      - name: CHANGELOG 里是否有对应条目
+        run: |
+          set -e
+          V=$(tr -d ' \r\n' < VERSION)
+          if ! grep -q "^## v$V" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md 里没有 v$V 的条目"
+            grep -n '^## ' CHANGELOG.md || true
+            exit 1
+          fi
+          echo "OK：版本号三处一致"
