@@ -79,6 +79,35 @@ jetHp        float[]
 shownMain / shownAccent  Color[] // 涂装
 ```
 
+### Mayday.Systems.FuelSystem（燃油：派生值 vs 真实存储）
+
+```csharp
+fuelL / fuelR        float   [get,set]  // 派生值，配 NetworkfuelL/NetworkfuelR 同步给客户端
+capacity             float   [get,set]  // 单箱容量
+tank                 float[] [get,set]  // ★ 模拟的真实存储，实测 2 个元素（左/右）
+reserveTank          float   [get,set]  // 本地储备油
+reserveSync          float   [get,set]  // 储备油的同步副本
+```
+
+**这里踩过一个坑，值得单列**：`fuelL/fuelR` 有 `NetworkfuelL` 之类的 SyncVar 备份字段，看上去像权威数据，于是第一版直接写它们。结果：
+
+```
+燃油还原 L=150.9 R=150.9                    ← 写入成功，回读也是 150.9
+燃油校验（3 秒后）L=160.0 R=160.0 → 不一致    ← 被满油覆盖
+```
+
+原因：模拟每帧从 `tank[]` 重算 `fuelL/fuelR`，SyncVar 同步的是**计算结果**，不是源头。改成先写 `tank[]` 再写 `fuelL/fuelR` 后：
+
+```
+燃油快照 tank=[152.2, 152.2]
+燃油还原 tank写入=2项
+燃油校验（3 秒后）L=152.2 R=152.2 期望 L=152.2 R=152.2 → 一致
+```
+
+**通用教训**：判断"能不能写"不能只看有没有 SyncVar 备份字段，要看模拟读的是哪个。**写完之后隔几秒回读**是唯一可靠的验证方式——即时回读一定会读到你刚写的值，看起来永远是对的。
+
+另外 `PlaneTelemetry.FuelLiters` 是每帧刷新的只读快照，写它完全无效，只能用来读。
+
 ## 持久化的既有范式
 
 游戏自己在 `%USERPROFILE%\AppData\LocalLow\Lyngo Games\Mayday Airways\` 下写 JSON，缩进 4 空格、camelCase、带版本号（`settingsVersion` / `cosmeticsVersion`），还有 `LegacyDataMigration` 做版本迁移。本插件的 `career.json` 沿用同一套约定。
@@ -205,7 +234,6 @@ grep -aq -F -f /tmp/pat.bin MaydayCareer.dll
 ## 待解决
 
 1. `ServerResetRun(int, int)` 两个参数的含义（seed？难度？）—— 影响能否连 `Leg`、`RunSeed` 一起还原
-2. 油量的真实写入点（telemetry 只是快照）
 3. 机体损伤与涂装的还原路径
 4. 多人下队友重连后的状态是否完整（`SyncList` 全量同步应该没问题，未验证）
 5. `CompleteInstall` 内部是否就是调 `ServerInstallRow`、是否会顺手用 `FreeKitAt` 销毁附近套件 —— 没有 IL 无法确认
