@@ -1,48 +1,45 @@
 # 更新记录
 
-## v1.0.1 — 恢复机翼掉漆持久化
-
-之前把机翼掉漆和机体损伤一起砍掉了，理由是"飞行途中会被补好"。这个判断对破洞成立（玩家拿胶带就补了），对**掉漆不成立**——掉漆不会自己恢复，得专门拿喷漆去补，属于真状态。所以恢复：
-
-- 新增 `SavePaint` / `LoadPaint`：存读 `HullSystem.paintCover`
-- `paintInit = false` 时既不读也不写（那时全零只是占位，硬写会把好飞机写成整机掉漆）
-- 已知缺口：材质重绘不一定立刻生效，数据层是准的
-
-机体损伤（破洞 / 分段）仍然不保存，理由不变。
-
 ## v1.0.0 — 首个正式版
 
-跨局进度存档，覆盖 9 类状态。
+给《Mayday Airways》Demo 补的跨局进度存档，覆盖 10 类状态。
 
-**保存**
+### 保存
 
-- 金钱 / 欠款
-- 第几段 / 当前机场 / 目的地 / 随机种子
-- 评级 / 难度 / 累计收入 / 累计乘客
-- 已购升级（`SyncList<string>`，走 `ServerAddUpgrade`）
-- 座排数量（`PassengerDirector.rowMask` 位图，走 `ServerInstallRow`）
-- 燃油：左右箱与储备油的**绝对升数**（`FuelSystem.tank[]`）
-- 发动机：每台的 `state` / `faults` / `rpm` / `cowl` / 机油量（`EngineUnit`）
-- 客舱器材：场景里实体物品的完整快照，按 socket 层级路径找回原位
+| 项 | 数据来源 |
+|---|---|
+| 金钱 / 欠款 | `GameState.Money` / `Debt` |
+| 第几段 / 当前机场 / 目的地 / 随机种子 | `GameState.Leg` / `CurrentAirport` / `DestinationAirport` / `RunSeed` |
+| 评级 / 难度 / 累计收入 / 累计乘客 | `GameState` |
+| 已购升级 | `Upgrades`（`SyncList<string>`），走 `ServerAddUpgrade` |
+| 座位排数 | `PassengerDirector.rowMask` 位图，走 `ServerInstallRow` |
+| 燃油 | `FuelSystem.tank[]` 左右箱 + 储备油，**绝对升数**不是比例 |
+| 发动机 | 每台的 `state` / `faults` / `rpm` / `cowl` / 机油量（`EngineUnit`） |
+| 机翼掉漆 | `HullSystem.paintCover`，每块外皮"还剩多少漆" |
+| 客舱器材 | 场景里实体物品的完整快照，按 socket 层级路径找回原位 |
 
-**机制**
+### 不保存
 
-- 存盘：成功落地（`Arrived` / `Turnaround`）自动存，或机舱内按 `J`
-- 读档：按 `F9`（默认手动），读档后 3 秒自动回读校验燃油与发动机
-- 坠机（`GameOver`）默认不存盘，存档永远是"最后一次成功落地"
-- 每次写盘前备份为 `career.bak.json`
-- 存盘回退保护：当前局比存档更早时拒绝存盘，避免用新公司覆盖真进度
-- 座排被游戏重置时（新一轮 / 站点重锚）自动补回
+| 项 | 原因 |
+|---|---|
+| 机身破洞 | 洞的几何数据不在托管层：`holes` / `holes.objects` / `holePlaced` / `HoleOpen()` / `holeViews` / `breaches` 在洞明明存在时全部返回零或未激活 |
+| 分段受损（`jetHp`） | 是破洞的派生值：直接写当场可读、3 秒后归零；改写 `jetSync` / `sectSync` 位图也无效 |
+| 行李 / 手持物 / 炸弹 | 运行时临时对象，结算时游戏自己会清 |
+| 火焰、冒烟等特效 | 瞬时视觉，只还原"故障"这个事实 |
 
-**不保存**
+### 机制
 
-- 机身破洞与分段损伤 —— 洞的几何数据不在托管层，分段是它的派生值
-- 机翼掉漆 —— 数据层可存，但视觉无法重绘
-- 行李 / 手持物 / 运行时临时物 / 火焰等瞬时特效
+- **存盘**：成功落地（`Arrived` / `Turnaround`）自动存，或机舱内按 `J`
+- **读档**：按 `F9`（默认手动）
+- **校验**：读写燃油 / 发动机后 3 秒自动回读，日志给出"一致 / 不一致"
+- **备份**：每次写盘前把上一份留成 `career.bak.json`
+- **坠机不存**：`GameOver` 默认跳过，存档永远是"最后一次成功落地"
+- **回退保护**：当前局比存档更早时拒绝写盘，避免用刚开的新公司覆盖真进度
+- **座排自愈**：游戏重置客舱（新一轮 / 站点重锚）后自动补回存档要求的排数
 
-**开发过程中确认的几个坑**
+### 开发中确认的四个坑
 
-- `fuelL/fuelR`、`EngineUnit.oil`、`jetHp` 都是派生值，写它们"当场可读、几秒后被重算"
-- 真源分别是 `tank[]` 与 `lOil`
-- `ServerResetRun` 之后才读档会错过各系统的初始化窗口
-- `Upgrades` 只是台账，实体效果（座排）必须另外补
+1. **带 `Network*` 镜像的字段往往是同步副本，不是真源。** `fuelL/fuelR`（真源 `tank[]`）、`EngineUnit.oil`（真源 `lOil`）都是这样：写派生值"当场回读正常、3 秒后被打回原值"。所以必须先写源、再延迟回读验证。
+2. **`Upgrades` 只是购买台账，不是效果开关。** 座排这类实体是购买那一刻 spawn 出来的，改列表不会让座位长出来，必须单独补 `rowMask`。
+3. **`paintInit = false` 时 `paintCover` 全是零占位**，不代表"整机掉漆"。这时既不读也不写，否则会把好飞机写成掉光漆。
+4. **`NetworkManager.singleton` 在 `ApplyDefaults` 阶段是 null**，读档全程用组件单例和 `GameState.Instance`。

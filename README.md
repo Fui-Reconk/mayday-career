@@ -11,7 +11,7 @@
 
 ---
 
-## v1.0.1 保存了什么
+## v1.0.0 保存了什么
 
 | 项 | 数据来源 | 状态 |
 |---|---|---|
@@ -157,7 +157,7 @@ BepInEx\config\local.mayday.career.cfg
 游戏启动后窗口标题会带 `BepInEx` 字样。日志在 `BepInEx\LogOutput.log`，正常应该能看到：
 
 ```
-[MaydayCareer] 已加载 v1.0.1
+[MaydayCareer] 已加载 v1.0.0
 [MaydayCareer] 存档路径 = ...\career.json
 [MaydayCareer] 补丁数 = 7
 ```
@@ -192,7 +192,7 @@ BepInEx\config\local.mayday.career.cfg
 
 ## 版本兼容性
 
-v1.0.1 针对 **游戏 0.14.11 / Unity 6000.3.20f1 / IL2CPP metadata v39** 开发，运行时为 **BepInEx 6.0.0-be.793**。
+v1.0.0 针对 **游戏 0.14.11 / Unity 6000.3.20f1 / IL2CPP metadata v39** 开发，运行时为 **BepInEx 6.0.0-be.793**。
 
 游戏更新后如果 `ServerResetRun`、`SetStage`、`ServerReanchor`、`FuelSystem`、`EngineUnit` 等被改名或改结构，Harmony 会打补丁失败或字段读不到。排查入口：`BepInEx\LogOutput.log` 搜 `MaydayCareer`。
 
