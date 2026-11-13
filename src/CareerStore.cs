@@ -191,6 +191,7 @@ namespace MaydayCareer
     {
         static string _dir;
         static string _file;
+        static string _bakFile;
 
         public static string FilePath => _file;
 
@@ -198,6 +199,7 @@ namespace MaydayCareer
         {
             _dir = ResolveDir();
             _file = Path.Combine(_dir, "career.json");
+            _bakFile = Path.Combine(_dir, "career.bak.json");
             Plugin.LogSource.LogInfo("[MaydayCareer] 存档路径 = " + _file);
         }
 
@@ -249,6 +251,12 @@ namespace MaydayCareer
             else Plugin.LogSource.LogInfo("[MaydayCareer] 物品快照未启用（SaveItems=false）");
 
             Directory.CreateDirectory(_dir);
+
+            // 写盘前先把上一份留一份。
+            // 用户有过连按读档键把进度按回旧值的经历 —— 读档是覆盖操作，
+            // 至少让被覆盖的那份还能手工捞回来。
+            if (File.Exists(_file)) BackupExisting();
+
             string tmp = _file + ".tmp";
             File.WriteAllText(tmp, s.ToJson(), new UTF8Encoding(false));
             if (File.Exists(_file)) File.Delete(_file);
@@ -257,6 +265,28 @@ namespace MaydayCareer
             Plugin.LogSource.LogInfo(string.Format(
                 "[MaydayCareer] 已保存 钱={0} 债={1} 第{2}段 升级={3} 座排={4} 物品={5} -> {6}",
                 s.money, s.debt, s.leg, s.upgrades.Count, s.seatRows.Count, s.items.Count, _file));
+        }
+
+        /// <summary>
+        /// 把当前 career.json 复制成 career.bak.json（覆盖旧 bak）。
+        ///
+        /// 失败只 warn，绝不允许挡住正常存盘 —— 备份是兜底，不是存盘的前置条件。
+        /// 只做"写档前备份上一份"，不做"读档前备份"：语义简单，
+        /// 用户随时能手工把 bak 改名回 career.json 捞回上一次。
+        /// </summary>
+        static void BackupExisting()
+        {
+            try
+            {
+                File.Copy(_file, _bakFile, true);
+                Plugin.LogSource.LogInfo(
+                    "[MaydayCareer] 已备份上一份存档 -> " + Path.GetFileName(_bakFile));
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning(
+                    "[MaydayCareer] 备份上一份存档失败（不影响本次存盘）: " + e.Message);
+            }
         }
 
         static List<string> ReadUpgrades(global::Mayday.GameState gs)
