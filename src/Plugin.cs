@@ -14,18 +14,19 @@ namespace MaydayCareer
     /// 随房间建立和销毁 —— 退出即清零。
     ///
     /// 本插件在每趟航班结算后把这些值写进 career.json，
-    /// 在 ServerResetRun（开局重置）之后写回去。
+    /// 在进入新一轮（DirectorStage.PreShift）时写回去。
     /// </summary>
     [BepInPlugin(Guid, Name, Version)]
     public sealed class Plugin : BasePlugin
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "0.1.0";
+        public const string Version = "0.2.0";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
         internal static ConfigEntry<bool> ClearBeforeLoad;
+        internal static ConfigEntry<bool> Verbose;
 
         public override void Load()
         {
@@ -43,6 +44,12 @@ namespace MaydayCareer
                 false,
                 "读档前先把本次开局给的初始资金清掉，再写入存档金额。\n" +
                 "若读档后钱变成两倍，把这项改成 true。");
+
+            Verbose = Config.Bind(
+                "General",
+                "Verbose",
+                true,
+                "把导演机的每次阶段切换打进日志。排查时开，稳定后可以关。");
 
             LogSource.LogInfo("[MaydayCareer] 已加载 v" + Version);
 

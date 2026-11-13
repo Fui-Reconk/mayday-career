@@ -169,6 +169,21 @@ namespace MaydayCareer
             }
         }
 
+        static bool _applied;
+
+        /// <summary>读档只做一次，避免阶段机每次回到 PreShift 都重新加钱。</summary>
+        public static void ApplyOnce()
+        {
+            if (_applied) return;
+            _applied = true;
+            Apply();
+        }
+
+        public static void ResetApplyFlag()
+        {
+            _applied = false;
+        }
+
         public static void Apply()
         {
             var s = Load();
