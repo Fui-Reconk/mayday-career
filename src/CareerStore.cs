@@ -41,6 +41,11 @@ namespace MaydayCareer
         public string sectSync = "0";
         public bool hasHullField;
 
+        // 发动机：每台一条记录。state/faults/rpm/cowl 都是 SyncVar，
+        // oil/temp/fire 是本地模拟值（写它们才留得住，写派生值没用 —— 燃油那轮的教训）。
+        public List<EngineRec> engines = new List<EngineRec>();
+        public bool hasEngineField;
+
         public List<string> upgrades = new List<string>();
 
         // 座排：rowMask 是权威位图（PassengerDirector.rowMask 的 SyncVar），
@@ -59,6 +64,48 @@ namespace MaydayCareer
         // 前者要显式警告，后者是正常状态，不能混为一谈。
         public bool hasSeatRowField;
         public bool hasItemsField;
+
+        public sealed class EngineRec
+        {
+            public int index;
+            public int state;
+            public int faults;
+            public int cowl;
+            public int bat;
+            public int swap;
+            public int swapSerial;
+            public float rpm;
+            public float oil;
+            public float temp;
+            public float fire;
+            public float batt;
+            public float swapP;
+        }
+
+        public static List<EngineRec> ParseEngines(Dictionary<string, object> d)
+        {
+            var list = new List<EngineRec>();
+            foreach (var o in Json.GetObjList(d, "engines"))
+            {
+                list.Add(new EngineRec
+                {
+                    index = Json.GetInt(o, "index", 0),
+                    state = Json.GetInt(o, "state", 0),
+                    faults = Json.GetInt(o, "faults", 0),
+                    cowl = Json.GetInt(o, "cowl", 0),
+                    bat = Json.GetInt(o, "bat", 0),
+                    swap = Json.GetInt(o, "swap", 0),
+                    swapSerial = Json.GetInt(o, "swapSerial", 0),
+                    rpm = Json.GetFloat(o, "rpm", 0f),
+                    oil = Json.GetFloat(o, "oil", 0f),
+                    temp = Json.GetFloat(o, "temp", 0f),
+                    fire = Json.GetFloat(o, "fire", 0f),
+                    batt = Json.GetFloat(o, "batt", 0f),
+                    swapP = Json.GetFloat(o, "swapP", 0f),
+                });
+            }
+            return list;
+        }
 
         public string ToJson()
         {
@@ -98,6 +145,24 @@ namespace MaydayCareer
             sb.Append("],\n");
             sb.Append("    \"jetSync\": "); Json.Escape(sb, jetSync ?? "0"); sb.Append(",\n");
             sb.Append("    \"sectSync\": "); Json.Escape(sb, sectSync ?? "0"); sb.Append(",\n");
+            sb.Append("    \"engines\": [");
+            for (int ei = 0; ei < engines.Count; ei++)
+            {
+                if (ei > 0) sb.Append(", ");
+                var e = engines[ei];
+                sb.Append("{\"index\": ").Append(e.index);
+                sb.Append(", \"state\": ").Append(e.state);
+                sb.Append(", \"faults\": ").Append(e.faults);
+                sb.Append(", \"cowl\": ").Append(e.cowl);
+                sb.Append(", \"bat\": ").Append(e.bat);
+                sb.Append(", \"rpm\": ").Append(Json.Num(e.rpm));
+                sb.Append(", \"oil\": ").Append(Json.Num(e.oil));
+                sb.Append(", \"temp\": ").Append(Json.Num(e.temp));
+                sb.Append(", \"fire\": ").Append(Json.Num(e.fire));
+                sb.Append(", \"batt\": ").Append(Json.Num(e.batt));
+                sb.Append("}");
+            }
+            sb.Append("],\n");
             sb.Append("    \"upgrades\": [");
             for (int i = 0; i < upgrades.Count; i++)
             {
@@ -158,6 +223,8 @@ namespace MaydayCareer
                 hasHullField = d.ContainsKey("breaches"),
                 hasFuelField = d.ContainsKey("fuelL"),
                 upgrades = Json.GetStrList(d, "upgrades"),
+                hasEngineField = d.ContainsKey("engines"),
+                engines = ParseEngines(d),
                 seatRowMask = Json.GetInt(d, "seatRowMask", 0),
                 seatRowCount = Json.GetInt(d, "seatRowCount", 0),
                 seatRows = Json.GetIntList(d, "seatRows"),
@@ -301,6 +368,7 @@ namespace MaydayCareer
             // 游戏自身完全不持久化，只能我们自己扫场景存下来。
             if (Plugin.SaveFuel.Value) ReadFuel(s);
             if (Plugin.SaveHull.Value) ReadHull(s);
+            if (Plugin.SaveEngine.Value) ReadEngines(s);
             int skipped = 0;
             if (Plugin.SaveItems.Value) s.items = RecordItems(out skipped);
             else Plugin.LogSource.LogInfo("[MaydayCareer] 物品快照未启用（SaveItems=false）");
@@ -484,6 +552,7 @@ namespace MaydayCareer
             RebuildSeats(s.seatRowMask, s.seatRows, s.hasSeatRowField);
             if (Plugin.LoadFuel.Value) RestoreFuel(s);
             if (Plugin.LoadHull.Value) RestoreHull(s);
+            if (Plugin.LoadEngine.Value) RestoreEngines(s);
             RestoreItemsOnLoad(s.items);
             DumpCatalog(s);
         }
@@ -501,6 +570,127 @@ namespace MaydayCareer
             if (s == null) return false;
             if (s.version < 2) return true;
             return !s.hasSeatRowField && !s.hasItemsField;
+        }
+
+        // ---------- 发动机 ----------
+
+        static global::Mayday.Systems.EngineUnit[] FindEngines()
+        {
+            try
+            {
+                var arr = UnityEngine.Object.FindObjectsOfType<global::Mayday.Systems.EngineUnit>();
+                if (arr == null) return new global::Mayday.Systems.EngineUnit[0];
+                var list = new List<global::Mayday.Systems.EngineUnit>();
+                for (int i = 0; i < arr.Length; i++) if (arr[i] != null) list.Add(arr[i]);
+                list.Sort((a, b) => a.index.CompareTo(b.index));
+                return list.ToArray();
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 找不到 EngineUnit: " + e.Message);
+                return new global::Mayday.Systems.EngineUnit[0];
+            }
+        }
+
+        static void ReadEngines(CareerState s)
+        {
+            try
+            {
+                var units = FindEngines();
+                if (units.Length == 0) { Plugin.LogSource.LogWarning("[MaydayCareer] 发动机快照跳过：一台都没找到"); return; }
+                s.engines.Clear();
+                foreach (var u in units)
+                {
+                    s.engines.Add(new CareerState.EngineRec
+                    {
+                        index = u.index,
+                        state = (int)u.state,
+                        faults = u.faults,
+                        cowl = (int)u.cowl,
+                        bat = (int)u.bat,
+                        swap = u.swap,
+                        swapSerial = u.swapSerial,
+                        rpm = u.rpm,
+                        oil = u.oil,
+                        temp = u.temp,
+                        fire = u.fire,
+                        batt = u.batt,
+                        swapP = u.swapP,
+                    });
+                }
+                var sbE = new StringBuilder();
+                foreach (var e in s.engines)
+                    sbE.Append(" #" + e.index + " state=" + e.state + " faults=0x" + e.faults.ToString("X2") + " rpm=" + e.rpm.ToString("F0") + " oil=" + e.oil.ToString("F2") + " temp=" + e.temp.ToString("F1"));
+                Plugin.LogSource.LogInfo("[MaydayCareer] 发动机快照" + units.Length + "台:" + sbE);
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 发动机快照失败: " + e.Message); }
+        }
+
+        static DateTime _engineCheckAt;
+        static string _expectEngines = "";
+
+        static void RestoreEngines(CareerState s)
+        {
+            if (!s.hasEngineField || s.engines.Count == 0)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 发动机还原跳过：存档没有该字段或为空");
+                return;
+            }
+            try
+            {
+                var units = FindEngines();
+                if (units.Length == 0) { Plugin.LogSource.LogWarning("[MaydayCareer] 发动机还原跳过：一台都没找到"); return; }
+
+                var sbE = new StringBuilder();
+                int matched = 0;
+                foreach (var rec in s.engines)
+                {
+                    foreach (var u in units)
+                    {
+                        if (u.index != rec.index) continue;
+                        matched++;
+                        try
+                        {
+                            u.state = (global::Mayday.Systems.EngineState)rec.state;
+                            u.faults = (ushort)rec.faults;
+                            u.cowl = (global::Mayday.Systems.CowlState)rec.cowl;
+                            u.bat = (global::Mayday.Systems.BatteryState)rec.bat;
+                            u.rpm = rec.rpm;
+                            u.oil = rec.oil;
+                            u.temp = rec.temp;
+                            u.fire = rec.fire;
+                            u.batt = rec.batt;
+                            u.swap = (byte)rec.swap;
+                        }
+                        catch (Exception ee) { Plugin.LogSource.LogWarning("[MaydayCareer] 写引擎 #" + rec.index + " 失败: " + ee.Message); }
+                        sbE.Append(" #" + rec.index + " state=" + rec.state + " faults=0x" + rec.faults.ToString("X2"));
+                        break;
+                    }
+                }
+                Plugin.LogSource.LogInfo("[MaydayCareer] 发动机还原 " + matched + "/" + s.engines.Count + " 台:" + sbE);
+
+                _expectEngines = sbE.ToString();
+                _engineCheckAt = DateTime.UtcNow.AddSeconds(3);
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 发动机还原失败: " + e.Message); }
+        }
+
+        /// <summary>3 秒后回读发动机状态，确认真留住了（派生值会被模拟覆盖）。</summary>
+        public static void TickVerifyEngines()
+        {
+            if (_engineCheckAt == default) return;
+            if (DateTime.UtcNow < _engineCheckAt) return;
+            _engineCheckAt = default;
+            try
+            {
+                var units = FindEngines();
+                var sbE = new StringBuilder();
+                foreach (var u in units)
+                    sbE.Append(" #" + u.index + " state=" + (int)u.state + " faults=0x" + u.faults.ToString("X2"));
+                bool ok = sbE.ToString() == _expectEngines;
+                Plugin.LogSource.LogInfo("[MaydayCareer] 发动机校验（3 秒后）" + sbE + " → " + (ok ? "一致" : "不一致（期望" + _expectEngines + "）"));
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 发动机校验失败: " + e.Message); }
         }
 
         // ---------- 机体损伤 ----------
