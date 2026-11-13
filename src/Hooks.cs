@@ -68,11 +68,19 @@ namespace MaydayCareer
                         CareerStore.ApplyOnce();
                         break;
 
-                    // 落地 / 下一段周转 / 整轮结束：都是飞行之后，可以安全存盘。
+                    // 落地 / 下一段周转：都是成功飞行之后，可以安全存盘。
                     case global::Mayday.Airport.DirectorStage.Arrived:
                     case global::Mayday.Airport.DirectorStage.Turnaround:
-                    case global::Mayday.Airport.DirectorStage.GameOver:
                         if (Plugin.AutoSave.Value) CareerStore.Save();
+                        break;
+
+                    // 坠机轮结束：默认不存。
+                    // 游戏的设计是失败即可整轮作废（GameOver 后立刻回 PreShift），
+                    // 在这里存盘等于把"一轮作废"改成"检查点"，而且会当场污染下一轮。
+                    // 想让坠机也计入生涯的，把配置里的 SaveOnCrash 打开。
+                    case global::Mayday.Airport.DirectorStage.GameOver:
+                        if (Plugin.AutoSave.Value && Plugin.SaveOnCrash.Value) CareerStore.Save();
+                        else Plugin.LogSource.LogInfo("[MaydayCareer] 坠机，按设置不覆盖存档");
                         break;
                 }
             }

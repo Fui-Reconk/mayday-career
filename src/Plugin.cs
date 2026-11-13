@@ -28,6 +28,8 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> ClearBeforeLoad;
         internal static ConfigEntry<bool> Verbose;
 
+        internal static ConfigEntry<bool> SaveOnCrash;
+
         public override void Load()
         {
             LogSource = base.Log;
@@ -50,6 +52,14 @@ namespace MaydayCareer
                 "Verbose",
                 true,
                 "把导演机的每次阶段切换打进日志。排查时开，稳定后可以关。");
+
+            SaveOnCrash = Config.Bind(
+                "General",
+                "SaveOnCrash",
+                false,
+                "坠机（GameOver）时是否也存盘。\n" +
+                "默认 false：存档停在最后一次成功落地，坠机不覆盖，退出重进可以回到摔之前。\n" +
+                "改成 true 则坠机也计入生涯，钱亏了就真亏了。");
 
             LogSource.LogInfo("[MaydayCareer] 已加载 v" + Version);
 
