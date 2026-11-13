@@ -1,0 +1,14 @@
+bin/
+obj/
+dist/
+*.zip
+*.user
+.vs/
+.idea/
+
+# 游戏派生物，绝不能提交
+BepInEx/
+interop/
+*.doorstop_version
+doorstop_config.ini
+winhttp.dll
