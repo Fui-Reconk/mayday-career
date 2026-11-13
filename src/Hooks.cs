@@ -60,8 +60,21 @@ namespace MaydayCareer
                 if (Plugin.Verbose.Value)
                     Plugin.LogSource.LogInfo("[MaydayCareer] 阶段 -> " + stage);
 
-                if (stage == global::Mayday.Airport.DirectorStage.PreShift)
-                    CareerStore.ApplyOnce();
+                switch (stage)
+                {
+                    // 新一轮开始：读档。这里绝不能存盘，否则会用开局初始值覆盖存档。
+                    case global::Mayday.Airport.DirectorStage.PreShift:
+                        CareerStore.LogNetworkMode();
+                        CareerStore.ApplyOnce();
+                        break;
+
+                    // 落地 / 下一段周转 / 整轮结束：都是飞行之后，可以安全存盘。
+                    case global::Mayday.Airport.DirectorStage.Arrived:
+                    case global::Mayday.Airport.DirectorStage.Turnaround:
+                    case global::Mayday.Airport.DirectorStage.GameOver:
+                        if (Plugin.AutoSave.Value) CareerStore.Save();
+                        break;
+                }
             }
             catch (System.Exception e)
             {

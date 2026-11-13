@@ -171,6 +171,30 @@ namespace MaydayCareer
 
         static bool _applied;
 
+        /// <summary>
+        /// 把当前网络身份打进日志。
+        /// ServerReport / SetStage 都是服务端方法，只有房主才会执行；
+        /// 如果玩家是纯客户端，这里会显示 server=False，那就说明补丁本来就不该触发。
+        /// </summary>
+        public static void LogNetworkMode()
+        {
+            try
+            {
+                bool server = global::Mirror.NetworkServer.active;
+                bool client = global::Mirror.NetworkClient.active;
+                string mode = server && client ? "host（房主）"
+                            : server ? "dedicated server"
+                            : client ? "client（客户端，存档不会触发）"
+                            : "offline（没有任何网络会话）";
+                Plugin.LogSource.LogInfo("[MaydayCareer] 网络模式: " + mode
+                    + " | GameState=" + (global::Mayday.GameState.Instance != null ? "有" : "空"));
+            }
+            catch (System.Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 探测网络模式失败: " + e.Message);
+            }
+        }
+
         /// <summary>读档只做一次，避免阶段机每次回到 PreShift 都重新加钱。</summary>
         public static void ApplyOnce()
         {
