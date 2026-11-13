@@ -33,6 +33,12 @@ namespace MaydayCareer
         public List<float> tanks = new List<float>();
         public bool hasFuelField;
 
+        // 机翼掉漆：paintCover 是 per-外皮块的"还剩多少漆"，1 = 完好。
+        // 掉漆在游戏里不会自己恢复（玩家要拿喷漆去补），所以属于真状态，值得存。
+        // paintInit=false 时这个数组只是全零占位，不能当成"整机掉漆"。
+        public List<float> paintCover = new List<float>();
+        public bool hasPaintField;
+
 
         // 发动机：每台一条记录。state/faults/rpm/cowl 都是 SyncVar，
         // oil/temp/fire 是本地模拟值（写它们才留得住，写派生值没用 —— 燃油那轮的教训）。
@@ -130,6 +136,13 @@ namespace MaydayCareer
                 sb.Append(Json.Num(tanks[ti]));
             }
             sb.Append("],\n");
+            sb.Append("    \"paintCover\": [");
+            for (int pi = 0; pi < paintCover.Count; pi++)
+            {
+                if (pi > 0) sb.Append(", ");
+                sb.Append(Json.Num(paintCover[pi]));
+            }
+            sb.Append("],\n");
             sb.Append("    \"upgrades\": [");
             for (int i = 0; i < upgrades.Count; i++)
             {
@@ -183,6 +196,8 @@ namespace MaydayCareer
                 fuelCapacity = Json.GetFloat(d, "fuelCapacity", 0f),
                 reserveSync = Json.GetFloat(d, "reserveSync", 0f),
                 tanks = Json.GetFloatList(d, "tanks"),
+                paintCover = Json.GetFloatList(d, "paintCover"),
+                hasPaintField = d.ContainsKey("paintCover"),
                 hasFuelField = d.ContainsKey("fuelL"),
                 upgrades = Json.GetStrList(d, "upgrades"),
                 hasEngineField = d.ContainsKey("engines"),
@@ -349,6 +364,7 @@ namespace MaydayCareer
             // 世界物品快照：座排之外，"客舱里的器材"全部来自补给站购买，
             // 游戏自身完全不持久化，只能我们自己扫场景存下来。
             if (Plugin.SaveFuel.Value) ReadFuel(s);
+            if (Plugin.SavePaint.Value) ReadPaint(s);
             if (Plugin.SaveEngine.Value) ReadEngines(s);
             int skipped = 0;
             if (Plugin.SaveItems.Value) s.items = RecordItems(out skipped);
@@ -532,6 +548,7 @@ namespace MaydayCareer
                 before, gs.Money, s.money, gs.Debt, gs.Leg, gs.CurrentAirport, added));
             RebuildSeats(s.seatRowMask, s.seatRows, s.hasSeatRowField);
             if (Plugin.LoadFuel.Value) RestoreFuel(s);
+            if (Plugin.LoadPaint.Value) RestorePaint(s);
             if (Plugin.LoadEngine.Value) RestoreEngines(s);
             RestoreItemsOnLoad(s.items);
             DumpCatalog(s);
@@ -690,6 +707,87 @@ namespace MaydayCareer
                 Plugin.LogSource.LogInfo("[MaydayCareer] 发动机校验（3 秒后）" + sbE + " → " + (ok ? "一致" : "不一致（期望" + _expectEngines + "）"));
             }
             catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 发动机校验失败: " + e.Message); }
+        }
+
+        // ---------- 机翼掉漆 ----------
+
+        static void ReadPaint(CareerState s)
+        {
+            s.paintCover.Clear();
+            try
+            {
+                var hs = UnityEngine.Object.FindObjectOfType<global::Mayday.Systems.HullSystem>();
+                if (hs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] 掉漆快照跳过：HullSystem 未就绪"); return; }
+
+                bool ready = false;
+                try { ready = hs.paintInit; } catch { }
+                if (!ready)
+                {
+                    Plugin.LogSource.LogInfo("[MaydayCareer] 掉漆快照跳过：漆面还没初始化（paintInit=false），全零只是占位");
+                    return;
+                }
+
+                var pc = hs.paintCover;
+                if (pc != null) for (int i = 0; i < pc.Length; i++) s.paintCover.Add(pc[i]);
+
+                float min = 1f;
+                for (int i = 0; i < s.paintCover.Count; i++) if (s.paintCover[i] < min) min = s.paintCover[i];
+                Plugin.LogSource.LogInfo(string.Format(
+                    "[MaydayCareer] 掉漆快照 {0} 块，最低 {1:F2}：[{2}]",
+                    s.paintCover.Count, min,
+                    string.Join(", ", s.paintCover.ConvertAll(v => v.ToString("F2")).ToArray())));
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 掉漆快照失败: " + e.Message); }
+        }
+
+        static void RestorePaint(CareerState s)
+        {
+            if (!s.hasPaintField || s.paintCover.Count == 0)
+            {
+                Plugin.LogSource.LogInfo("[MaydayCareer] 掉漆还原跳过：存档没有掉漆数据");
+                return;
+            }
+            try
+            {
+                var hs = UnityEngine.Object.FindObjectOfType<global::Mayday.Systems.HullSystem>();
+                if (hs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] 掉漆还原跳过：HullSystem 未就绪"); return; }
+
+                bool ready = false;
+                try { ready = hs.paintInit; } catch { }
+                if (!ready)
+                {
+                    // 未初始化时数组是全零占位，硬写等于把好飞机写成整机掉漆
+                    Plugin.LogSource.LogWarning("[MaydayCareer] 掉漆还原跳过：漆面还没初始化，现在写会把好飞机写成掉漆");
+                    return;
+                }
+
+                var pc = hs.paintCover;
+                if (pc == null) { Plugin.LogSource.LogWarning("[MaydayCareer] 掉漆还原跳过：paintCover 为空"); return; }
+
+                int n = Math.Min(pc.Length, s.paintCover.Count), wrote = 0;
+                for (int i = 0; i < n; i++) { pc[i] = s.paintCover[i]; wrote++; }
+
+                // 数据写完还要让游戏把材质刷一遍，否则画面上看不出变化。
+                try
+                {
+                    var mi = hs.GetType().GetMethod("TickPaint", System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+                    if (mi != null) mi.Invoke(hs, new object[] { 0.05f });
+                }
+                catch { }
+
+                Plugin.LogSource.LogInfo(string.Format(
+                    "[MaydayCareer] 掉漆还原 {0}/{1} 块（存档最低 {2:F2}）",
+                    wrote, pc.Length, MinOf(s.paintCover)));
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 掉漆还原失败: " + e.Message); }
+        }
+
+        static float MinOf(List<float> xs)
+        {
+            float m = 1f;
+            for (int i = 0; i < xs.Count; i++) if (xs[i] < m) m = xs[i];
+            return m;
         }
 
         // ---------- 燃油 ----------

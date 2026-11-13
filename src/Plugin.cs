@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "1.0.0";
+        public const string Version = "1.0.1";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
@@ -38,6 +38,8 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> LoadFuel;
         internal static ConfigEntry<bool> SaveEngine;
         internal static ConfigEntry<bool> LoadEngine;
+        internal static ConfigEntry<bool> SavePaint;
+        internal static ConfigEntry<bool> LoadPaint;
         internal static ConfigEntry<bool> GuardSave;
         internal static ConfigEntry<string> SaveKey;
 
@@ -139,6 +141,18 @@ namespace MaydayCareer
                 "LoadEngine",
                 true,
                 "读档时写回发动机状态。写入后 3 秒自动回读校验。");
+
+            SavePaint = Config.Bind(
+                "General",
+                "SavePaint",
+                true,
+                "存盘时记录机翼掉漆程度（HullSystem.paintCover）。掉漆不会自己恢复，属于真状态。");
+
+            LoadPaint = Config.Bind(
+                "General",
+                "LoadPaint",
+                true,
+                "读档时写回掉漆程度。注意：数据能还原，但材质重绘不一定成功。");
 
             GuardSave = Config.Bind(
                 "General",

@@ -11,7 +11,7 @@
 
 ---
 
-## v1.0.0 保存了什么
+## v1.0.1 保存了什么
 
 | 项 | 数据来源 | 状态 |
 |---|---|---|
@@ -23,6 +23,7 @@
 | 座位排数 | `PassengerDirector.rowMask` 位图 | ✅ |
 | 燃油 | `FuelSystem.tank[]` 左右箱 + 储备油（**绝对升数**） | ✅ |
 | 发动机 | 每台的 `state` / `faults` / `rpm` / `cowl` / 机油量 | ✅ |
+| **机翼掉漆** | `HullSystem.paintCover`（每块外皮"还剩多少漆"） | ✅ 数据层，视觉见下 |
 | 客舱器材 | 灭火器、锤子、胶带、油桶、座位套件等实体的完整快照 | ✅ |
 
 ### 不保存什么，以及为什么
@@ -31,10 +32,17 @@
 |---|---|
 | **机身破洞** | 游戏不把洞的坐标暴露给托管层——`holes`、`holePlaced`、`HoleOpen()`、`holeViews`、`breaches`、`jetHp`、`jetSync` 七个入口实测在洞明明存在时全部返回零或未激活。况且洞在飞行途中玩家就会补掉，留着反而怪 |
 | **分段受损（`jetHp`）** | 它是洞的派生值：直接写当场可读、3 秒后被重算归零；改写成 `jetSync` / `sectSync` 位图再试，`jetHp` 依然是零。没有洞可依附，"哪一段受损"就是个空状态 |
-| **机翼掉漆（`paintCover`）** | 数值能存能读（0.55 / 0.60 三秒后原样还在），但改了数组材质不重绘，`TickPaint` / `TickPaintCover` 都推不动视觉。而且机翼掉漆在飞行中就会被补漆 |
 | **行李** | 每趟航班按合同生成，结算时游戏自己会清 |
 | **手持物品、乘客携带物、炸弹** | 运行时临时对象（`Misc` 分类），存了没意义 |
 | **燃烧 / 冒烟等特效** | 瞬时视觉，只还原"故障"这个事实 |
+
+### 掉漆这一项的特殊说明
+
+机翼掉漆**不会自己恢复**——玩家得拿喷漆去补，而不少人玩到通关都没搞清怎么补。所以它是真状态，必须存。
+
+数据层已经验证：存档写 `[0.55, 0.60, 1.00, ...]`，读档 3 秒后原样还在。**唯一的缺口是材质重绘**——数组改了，游戏不一定立刻重画外皮，读档后可能要先飞一段、或者等它自己 tick 一次才看得出来。功能逻辑（要不要补漆）是按数据走的，所以不受影响。
+
+`paintInit = false` 时插件**不读也不写**这个数组——那时 12 个零只是占位，硬写会把好飞机写成"整机掉漆"。
 
 详细逆向过程见 [docs/FINDINGS.md](docs/FINDINGS.md)。
 
@@ -106,6 +114,7 @@ BepInEx\config\local.mayday.career.cfg
 | `SaveItems` / `LoadItems` | `true` | 客舱物品的存 / 读 |
 | `SaveFuel` / `LoadFuel` | `true` | 燃油的存 / 读（写入后 3 秒自动回读校验） |
 | `SaveEngine` / `LoadEngine` | `true` | 发动机的存 / 读（写入后 3 秒自动回读校验） |
+| `SavePaint` / `LoadPaint` | `true` | 机翼掉漆的存 / 读 |
 | `ClearBeforeLoad` | `false` | 读档后钱变成两倍时改成 `true` |
 | `Verbose` | `true` | 打印导演机的每次阶段切换，排查用 |
 
@@ -148,7 +157,7 @@ BepInEx\config\local.mayday.career.cfg
 游戏启动后窗口标题会带 `BepInEx` 字样。日志在 `BepInEx\LogOutput.log`，正常应该能看到：
 
 ```
-[MaydayCareer] 已加载 v1.0.0
+[MaydayCareer] 已加载 v1.0.1
 [MaydayCareer] 存档路径 = ...\career.json
 [MaydayCareer] 补丁数 = 7
 ```
@@ -183,7 +192,7 @@ BepInEx\config\local.mayday.career.cfg
 
 ## 版本兼容性
 
-v1.0.0 针对 **游戏 0.14.11 / Unity 6000.3.20f1 / IL2CPP metadata v39** 开发，运行时为 **BepInEx 6.0.0-be.793**。
+v1.0.1 针对 **游戏 0.14.11 / Unity 6000.3.20f1 / IL2CPP metadata v39** 开发，运行时为 **BepInEx 6.0.0-be.793**。
 
 游戏更新后如果 `ServerResetRun`、`SetStage`、`ServerReanchor`、`FuelSystem`、`EngineUnit` 等被改名或改结构，Harmony 会打补丁失败或字段读不到。排查入口：`BepInEx\LogOutput.log` 搜 `MaydayCareer`。
 
