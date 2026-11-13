@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "0.10.1";
+        public const string Version = "0.11.0";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
@@ -32,6 +32,7 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> AutoLoadOnStart;
         internal static ConfigEntry<string> LoadKey;
         internal static ConfigEntry<bool> DumpOnLoad;
+        internal static ConfigEntry<string> DamageKey;
         internal static ConfigEntry<bool> SaveItems;
         internal static ConfigEntry<bool> LoadItems;
         internal static ConfigEntry<bool> SaveFuel;
@@ -97,6 +98,14 @@ namespace MaydayCareer
                 "读档成功后把升级目录 / 物品目录 / 座位状态 / 补给站状态打进日志。\n" +
                 "这是排查用的：interop 里读不到字符串字面量，「哪个升级会送什么实物」只能运行时打出来。\n" +
                 "确认没问题之后关掉，日志会干净很多。");
+
+            DamageKey = Config.Bind(
+                "Debug",
+                "DamageKey",
+                "",
+                "调试用：按这个键在机身上打一个洞，用来复现没法等到的随机损伤。\n" +
+                "留空 = 关闭（默认）。填 F7 之类不冲突的键即可启用。\n" +
+                "打洞走游戏自己的 HullPanels.ServerBlowAt，日志会 dump 洞的坐标与 jetHp。");
 
             SaveItems = Config.Bind(
                 "General",

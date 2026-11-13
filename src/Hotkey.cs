@@ -23,6 +23,8 @@ namespace MaydayCareer
         static UnityEngine.InputSystem.Key _saveKey = SaveFallback;
         static bool _loadResolved;
         static bool _saveResolved;
+        static bool _damageResolved;
+        static UnityEngine.InputSystem.Key _damageKey = UnityEngine.InputSystem.Key.F7;
 
         /// <summary>解析一个热键名。失败打 warn 并返回 fallback，绝不抛。</summary>
         static UnityEngine.InputSystem.Key Resolve(string raw, UnityEngine.InputSystem.Key fallback, string what)
@@ -108,6 +110,34 @@ namespace MaydayCareer
             {
                 Plugin.LogSource.LogError("[MaydayCareer] 存盘热键异常: " + e);
             }
+        }
+
+        /// <summary>
+        /// 调试用：主动在机身上打洞。
+        ///
+        /// 创伤来自随机事件，手工复现不了。这个键调游戏自己的
+        /// HullPanels.ServerBlowAt 委托（随机事件走的就是它），
+        /// 把"不可复现"变成"按一下就有"。默认不绑定。
+        /// </summary>
+        static void PollDamage(UnityEngine.InputSystem.Keyboard kb)
+        {
+            try
+            {
+                string raw = Plugin.DamageKey.Value;
+                if (string.IsNullOrWhiteSpace(raw)) return;   // 未配置 = 关闭
+
+                if (!_damageResolved)
+                {
+                    _damageResolved = true;
+                    _damageKey = Resolve(raw, UnityEngine.InputSystem.Key.F7, "打洞");
+                }
+                if (kb[_damageKey].wasPressedThisFrame)
+                {
+                    Plugin.LogSource.LogInfo("[MaydayCareer] 检测到 " + _damageKey + "，调试打洞");
+                    CareerStore.DebugBreach();
+                }
+            }
+            catch (Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 打洞键异常: " + e); }
         }
     }
 }

@@ -478,6 +478,71 @@ namespace MaydayCareer
             return !s.hasSeatRowField && !s.hasItemsField;
         }
 
+        // ---------- 机体损伤（调试探针） ----------
+
+        /// <summary>
+        /// 主动打洞。创伤来自随机事件、手工等不到，这个键把"不可复现"变成"按一下就有"。
+        /// 走的是游戏自己的 HullPanels.ServerBlowAt —— 随机事件调的就是它。
+        /// </summary>
+        public static void DebugBreach()
+        {
+            try
+            {
+                var hs = UnityEngine.Object.FindObjectOfType<global::Mayday.Systems.HullSystem>();
+                if (hs == null) { Plugin.LogSource.LogWarning("[MaydayCareer][hull] 找不到 HullSystem"); return; }
+
+                DumpHull("打洞前", hs);
+
+                var blow = global::Mayday.HullPanels.ServerBlowAt;
+                if (blow == null) { Plugin.LogSource.LogWarning("[MaydayCareer][hull] ServerBlowAt 为空，无法打洞"); return; }
+
+                UnityEngine.Vector3 origin = hs.transform.position + UnityEngine.Vector3.up * 1.2f;
+                int ok = 0, fail = 0;
+                for (int i = 0; i < 3; i++)
+                {
+                    try
+                    {
+                        var pt = origin + new UnityEngine.Vector3(0.6f * i, 0f, 0.4f * i);
+                        int idx = blow.Invoke(pt, 0.25f);
+                        if (idx >= 0) ok++; else fail++;
+                        Plugin.LogSource.LogInfo("[MaydayCareer][hull] ServerBlowAt #" + i + " -> 面板=" + idx);
+                    }
+                    catch (Exception e)
+                    {
+                        fail++;
+                        Plugin.LogSource.LogWarning("[MaydayCareer][hull] 打洞失败: " + e.Message);
+                    }
+                }
+                Plugin.LogSource.LogInfo("[MaydayCareer][hull] 打洞结果 成功=" + ok + " 失败=" + fail);
+                DumpHull("打洞后", hs);
+            }
+            catch (Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 调试打洞异常: " + e); }
+        }
+
+        static void DumpHull(string tag, global::Mayday.Systems.HullSystem hs)
+        {
+            try
+            {
+                var holes = hs.holes;
+                int n = holes == null ? 0 : holes.Count;
+                Plugin.LogSource.LogInfo("[MaydayCareer][hull] " + tag + " 洞数=" + n);
+                for (int i = 0; i < n; i++)
+                {
+                    var v = holes[i];
+                    Plugin.LogSource.LogInfo(string.Format(
+                        "[MaydayCareer][hull]   洞{0} x={1:F3} y={2:F3} z={3:F3} w={4:F3}", i, v.x, v.y, v.z, v.w));
+                }
+                var jh = hs.jetHp;
+                if (jh != null && jh.Length > 0)
+                {
+                    var sb = new StringBuilder();
+                    for (int i = 0; i < jh.Length; i++) { if (i > 0) sb.Append(", "); sb.Append(jh[i].ToString("F2")); }
+                    Plugin.LogSource.LogInfo("[MaydayCareer][hull] " + tag + " jetHp=[" + sb + "] jetSync=" + hs.jetSync);
+                }
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer][hull] dump 失败: " + e.Message); }
+        }
+
         // ---------- 燃油 ----------
 
         // 真值在 FuelSystem 上：fuelL / fuelR 是 SyncVar（NetworkfuelL / NetworkfuelR），
