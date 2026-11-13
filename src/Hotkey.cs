@@ -23,8 +23,8 @@ namespace MaydayCareer
         static UnityEngine.InputSystem.Key _saveKey = SaveFallback;
         static bool _loadResolved;
         static bool _saveResolved;
-        static bool _damageResolved;
-        static UnityEngine.InputSystem.Key _damageKey = UnityEngine.InputSystem.Key.F7;
+        // 调试键写死 F7 —— 只是排查看的探针，不值得占一个配置项。
+        const UnityEngine.InputSystem.Key DamageKey = UnityEngine.InputSystem.Key.F7;
 
         /// <summary>解析一个热键名。失败打 warn 并返回 fallback，绝不抛。</summary>
         static UnityEngine.InputSystem.Key Resolve(string raw, UnityEngine.InputSystem.Key fallback, string what)
@@ -124,17 +124,9 @@ namespace MaydayCareer
         {
             try
             {
-                string raw = Plugin.DamageKey.Value;
-                if (string.IsNullOrWhiteSpace(raw)) return;   // 未配置 = 关闭
-
-                if (!_damageResolved)
+                if (kb[DamageKey].wasPressedThisFrame)
                 {
-                    _damageResolved = true;
-                    _damageKey = Resolve(raw, UnityEngine.InputSystem.Key.F7, "打洞");
-                }
-                if (kb[_damageKey].wasPressedThisFrame)
-                {
-                    Plugin.LogSource.LogInfo("[MaydayCareer] 检测到 " + _damageKey + "，调试打洞");
+                    Plugin.LogSource.LogInfo("[MaydayCareer] 检测到 F7，调试打洞");
                     CareerStore.DebugBreach();
                 }
             }
