@@ -397,8 +397,160 @@ namespace MaydayCareer
                 "[MaydayCareer] 已读档 钱 {0} -> {1}（存档 {2}） 债 {3} 第{4}段 机场{5} 升级 +{6}",
                 before, gs.Money, s.money, gs.Debt, gs.Leg, gs.CurrentAirport, added));
             RebuildSeats(s.seatRowMask, s.seatRows, s.hasSeatRowField);
+            EnsureSeatRows(Plugin.SeatRows.Value);
             RestoreItemsOnLoad(s.items);
             DumpCatalog(s);
+        }
+
+        /// <summary>rowMask 是 Byte → 位图硬上限 8 排。改不动，除非游戏换类型。</summary>
+        const int RowMaskLimit = 8;
+
+        /// <summary>
+        /// 把座排补到配置指定的数量。
+        ///
+        /// 和 RebuildSeats 的分工：
+        ///   RebuildSeats  = 按存档里的 rowMask 精确还原（v2 存档才有的数据）
+        ///   EnsureSeatRows = 在其之后，按配置"补足到 N 排"
+        /// 两者都跳过已装的排，所以反复按读档键是幂等的。
+        ///
+        /// 注意这是作弊性质的补足：只调 ServerInstallRow，不走
+        /// CmdInstallWork -> InstallTick -> CompleteInstall 那条需要
+        /// 手持 seat_kit、按进度条的真实安装流程，因此不会消耗任何套件。
+        ///
+        /// 上限取两个值的较小者：
+        ///   - rowMask 的 8 位
+        ///   - PlaneLayout.SeatRowZ.Length（舱体几何实际有几个座位排位）
+        /// 后者更重要：超出几何的 slot 没有对应座椅，装出来是空排。
+        /// </summary>
+        public static void EnsureSeatRows(int target)
+        {
+            try
+            {
+                if (target <= 0)
+                {
+                    Plugin.LogSource.LogInfo("[MaydayCareer] 座位补装 配置=0，不干预，保持游戏原样");
+                    return;
+                }
+
+                var pd = global::Mayday.Passengers.PassengerDirector.Instance;
+                if (pd == null)
+                {
+                    Plugin.LogSource.LogWarning("[MaydayCareer] 座位补装跳过：PassengerDirector 还没就绪");
+                    return;
+                }
+
+                var gs = global::Mayday.GameState.Instance;
+                if (gs == null)
+                {
+                    Plugin.LogSource.LogWarning("[MaydayCareer] 座位补装跳过：GameState 为空");
+                    return;
+                }
+
+                int limit = ResolveRowLimit();
+
+                if (target > limit)
+                {
+                    Plugin.LogSource.LogInfo(string.Format(
+                        "[MaydayCareer] 座位补装 配置={0} 超过上限，夹到 {1}", target, limit));
+                    target = limit;
+                }
+
+                int current = CountInstalledRows(pd, limit);
+                if (current >= target)
+                {
+                    Plugin.LogSource.LogInfo(string.Format(
+                        "[MaydayCareer] 座位补装 目标={0} 当前={1} → 无需补装", target, current));
+                    return;
+                }
+
+                // premium 沿用现有链路的状态，保证补出来的排和别的一致
+                bool want = false;
+                try { want = gs.HasUpgrade(global::Mayday.Airport.UpgradeCatalog.SeatPremium); }
+                catch { }
+
+                int attempted = 0;
+                for (int slot = 0; slot < limit; slot++)
+                {
+                    if (current + attempted >= target) break;
+
+                    bool already = false;
+                    try { already = pd.IsRowInstalled(slot); } catch { }
+                    if (already) continue;
+
+                    try
+                    {
+                        pd.ServerInstallRow(slot, want);
+                        attempted++;
+                    }
+                    catch (Exception e)
+                    {
+                        // 失败即停：硬推到上限只会留下半残的一排
+                        int stuck = current + attempted;
+                        try { stuck = CountInstalledRows(pd, limit); } catch { }
+                        Plugin.LogSource.LogWarning(string.Format(
+                            "[MaydayCareer] 座位补装 目标={0} 当前={1} → 补装到第{2}排失败：{3}，已停在{4}排",
+                            target, current, slot + 1, e.Message, stuck));
+                        return;
+                    }
+                }
+
+                // 重新数一遍，而不是拿算术结果充数 ——
+                // 如果 ServerInstallRow 对某些 slot 静默无效，这里能立刻暴露出来。
+                int after = CountInstalledRows(pd, limit);
+                if (after >= target)
+                {
+                    Plugin.LogSource.LogInfo(string.Format(
+                        "[MaydayCareer] 座位补装 目标={0} 当前={1} → 补装{2}排，完成={3}",
+                        target, current, attempted, after));
+                }
+                else
+                {
+                    Plugin.LogSource.LogWarning(string.Format(
+                        "[MaydayCareer] 座位补装 目标={0} 当前={1} → 补装{2}排，完成={3}（未达目标：{4} 之后的排位没有可装对象，或 ServerInstallRow 未生效）",
+                        target, current, attempted, after, after));
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogError("[MaydayCareer] 座位补装异常: " + e);
+            }
+        }
+
+        /// <summary>
+        /// 能装到第几排。取 rowMask 位宽和舱体几何排位数的较小者。
+        /// 几何数组拿不到就退回 8，但会打一条提示。
+        /// </summary>
+        static int ResolveRowLimit()
+        {
+            int limit = RowMaskLimit;
+            try
+            {
+                var zs = global::Mayday.PlaneLayout.SeatRowZ;
+                if (zs != null && zs.Length > 0)
+                {
+                    if (zs.Length < limit) limit = zs.Length;
+                }
+                else
+                {
+                    Plugin.LogSource.LogWarning(
+                        "[MaydayCareer] 座位补装 读不到 PlaneLayout.SeatRowZ，上限退回 " + limit + " 排");
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 座位补装 读几何排位数失败，上限退回 " + limit + " 排: " + e.Message);
+            }
+            return limit;
+        }
+
+        static int CountInstalledRows(global::Mayday.Passengers.PassengerDirector pd, int limit)
+        {
+            int n = 0;
+            for (int i = 0; i < limit; i++)
+            {
+                try { if (pd.IsRowInstalled(i)) n++; } catch { }
+            }
+            return n;
         }
 
         /// <summary>
