@@ -16,6 +16,7 @@ namespace MaydayCareer
         public int leg;
         public int runSeed;
         public int currentAirport;
+        public int destinationAirport;
         public int totalEarned;
         public int totalPassengers;
         public float rating;
@@ -33,6 +34,7 @@ namespace MaydayCareer
             sb.Append("    \"leg\": ").Append(leg).Append(",\n");
             sb.Append("    \"runSeed\": ").Append(runSeed).Append(",\n");
             sb.Append("    \"currentAirport\": ").Append(currentAirport).Append(",\n");
+            sb.Append("    \"destinationAirport\": ").Append(destinationAirport).Append(",\n");
             sb.Append("    \"totalEarned\": ").Append(totalEarned).Append(",\n");
             sb.Append("    \"totalPassengers\": ").Append(totalPassengers).Append(",\n");
             sb.Append("    \"rating\": ").Append(Json.Num(rating)).Append(",\n");
@@ -60,6 +62,7 @@ namespace MaydayCareer
                 leg = Json.GetInt(d, "leg", 0),
                 runSeed = Json.GetInt(d, "runSeed", 0),
                 currentAirport = Json.GetInt(d, "currentAirport", 0),
+                destinationAirport = Json.GetInt(d, "destinationAirport", 0),
                 totalEarned = Json.GetInt(d, "totalEarned", 0),
                 totalPassengers = Json.GetInt(d, "totalPassengers", 0),
                 rating = Json.GetFloat(d, "rating", 0f),
@@ -112,6 +115,7 @@ namespace MaydayCareer
                 leg = gs.Leg,
                 runSeed = gs.RunSeed,
                 currentAirport = gs.CurrentAirport,
+                destinationAirport = gs.DestinationAirport,
                 totalEarned = gs.TotalEarned,
                 totalPassengers = gs.TotalPassengers,
                 rating = gs.Rating,
@@ -242,9 +246,26 @@ namespace MaydayCareer
                 if (!gs.HasUpgrade(id)) { gs.ServerAddUpgrade(id); added++; }
             }
 
+            // 进度字段：都是 SyncVar 属性，直接写会标脏并同步给客户端。
+            // 逐个 try，某个失败不影响其他字段。
+            Try("RunSeed", () => gs.RunSeed = s.runSeed);
+            Try("Leg", () => gs.Leg = s.leg);
+            Try("CurrentAirport", () => gs.CurrentAirport = s.currentAirport);
+            Try("DestinationAirport", () => gs.DestinationAirport = s.destinationAirport);
+            Try("Rating", () => gs.Rating = s.rating);
+            Try("Difficulty", () => gs.Difficulty = s.difficulty);
+            Try("TotalEarned", () => gs.TotalEarned = s.totalEarned);
+            Try("TotalPassengers", () => gs.TotalPassengers = s.totalPassengers);
+
             Plugin.LogSource.LogInfo(string.Format(
-                "[MaydayCareer] 已读档 钱 {0} -> {1}（存档 {2}）升级 +{3}",
-                before, gs.Money, s.money, added));
+                "[MaydayCareer] 已读档 钱 {0} -> {1}（存档 {2}） 债 {3} 第{4}段 机场{5} 升级 +{6}",
+                before, gs.Money, s.money, gs.Debt, gs.Leg, gs.CurrentAirport, added));
+        }
+
+        static void Try(string what, Action act)
+        {
+            try { act(); }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 还原 " + what + " 失败: " + e.Message); }
         }
     }
 }
