@@ -161,6 +161,30 @@ namespace MaydayCareer
     }
 
     /// <summary>
+    /// 站点重建完成后再补一次物品。
+    ///
+    /// 为什么不用 GroundCrew.Reanchored 静态事件：
+    /// 那是个 Il2CppSystem.Action&lt;int&gt;，在 IL2CPP 下挂托管委托要过
+    /// Il2CppInterop 的委托封送，容易在运行时炸；而 ServerReanchor 是
+    /// 那个事件的发出点（public，签名 Void(Int32, ReanchorKind)），
+    /// 用 Harmony postfix 挂在它后面，语义完全等价、时机也一样
+    /// （所有 GroundService.ServerOnReanchor 都跑完了）。
+    ///
+    /// 这个时机晚于 GameDirector.CleanupItems()，所以补出来的物品不会被清场带走。
+    /// </summary>
+    [HarmonyPatch]
+    internal static class ReanchorHook
+    {
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(global::Mayday.Airport.GroundCrew), "ServerReanchor")]
+        private static void Postfix()
+        {
+            try { CareerStore.OnSiteReanchored(); }
+            catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 站点重建后补物品异常: " + e); }
+        }
+    }
+
+    /// <summary>
     /// 每帧轮询热键。
     ///
     /// 挂在 Mirror.NetworkManager.Update 上：IL2CPP 下不能自建 MonoBehaviour，

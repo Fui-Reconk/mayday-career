@@ -9,7 +9,7 @@ namespace MaydayCareer
     /// <summary>career.json 的模型。</summary>
     internal sealed class CareerState
     {
-        public int version = 1;
+        public int version = 2;
         public string savedAt = "";
 
         public int money;
@@ -23,6 +23,17 @@ namespace MaydayCareer
         public float rating;
         public float difficulty;
         public List<string> upgrades = new List<string>();
+
+        // 座排：rowMask 是权威位图（PassengerDirector.rowMask 的 SyncVar），
+        // seatRows 是逐位解出来的结果，留着当兜底和排查用。
+        // seatRowCount 只用来打日志 —— 它的语义（已装数 or 总槽位数）还没验死，
+        // 绝不能拿它当"该装几排"的依据。
+        public int seatRowMask;
+        public int seatRowCount;
+        public List<int> seatRows = new List<int>();
+
+        // 世界物品快照（不含行李和手持物）
+        public List<ItemRecord> items = new List<ItemRecord>();
 
         public string ToJson()
         {
@@ -46,7 +57,26 @@ namespace MaydayCareer
                 if (i > 0) sb.Append(", ");
                 Json.Escape(sb, upgrades[i]);
             }
-            sb.Append("]\n}\n");
+            sb.Append("],\n");
+            sb.Append("    \"seatRowMask\": ").Append(seatRowMask).Append(",\n");
+            sb.Append("    \"seatRowCount\": ").Append(seatRowCount).Append(",\n");
+            sb.Append("    \"seatRows\": [");
+            for (int i = 0; i < seatRows.Count; i++)
+            {
+                if (i > 0) sb.Append(", ");
+                sb.Append(seatRows[i]);
+            }
+            sb.Append("],\n");
+            sb.Append("    \"items\": [");
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append('\n');
+                sb.Append("        ");
+                ItemToJson(sb, items[i]);
+            }
+            sb.Append('\n');
+            sb.Append("    ]\n}\n");
             return sb.ToString();
         }
 
@@ -69,9 +99,84 @@ namespace MaydayCareer
                 rating = Json.GetFloat(d, "rating", 0f),
                 difficulty = Json.GetFloat(d, "difficulty", 1f),
                 upgrades = Json.GetStrList(d, "upgrades"),
+                seatRowMask = Json.GetInt(d, "seatRowMask", 0),
+                seatRowCount = Json.GetInt(d, "seatRowCount", 0),
+                seatRows = Json.GetIntList(d, "seatRows"),
+                items = ParseItems(d),
             };
             return s;
         }
+
+        /// <summary>把一条物品记录写成一行 JSON 对象。</summary>
+        static void ItemToJson(StringBuilder sb, ItemRecord r)
+        {
+            if (r == null) return;
+            sb.Append("{\"id\": ");
+            Json.Escape(sb, r.id ?? "");
+            sb.Append(", \"tint\": ").Append(r.tint);
+            sb.Append(", \"amount\": ").Append(Json.Num(r.amount));
+            sb.Append(", \"count\": ").Append(r.count);
+            sb.Append(", \"tag\": ").Append(r.tag);
+            sb.Append(", \"socket\": ");
+            Json.Escape(sb, r.socket ?? "");
+            sb.Append(", \"px\": ").Append(Json.Num(r.px));
+            sb.Append(", \"py\": ").Append(Json.Num(r.py));
+            sb.Append(", \"pz\": ").Append(Json.Num(r.pz));
+            sb.Append(", \"rx\": ").Append(Json.Num(r.rx));
+            sb.Append(", \"ry\": ").Append(Json.Num(r.ry));
+            sb.Append(", \"rz\": ").Append(Json.Num(r.rz));
+            sb.Append(", \"rw\": ").Append(Json.Num(r.rw));
+            sb.Append('}');
+        }
+
+        static List<ItemRecord> ParseItems(Dictionary<string, object> d)
+        {
+            var list = new List<ItemRecord>();
+            foreach (var od in Json.GetObjList(d, "items"))
+            {
+                if (od == null) continue;
+                var r = new ItemRecord
+                {
+                    id = Json.GetStr(od, "id", ""),
+                    tint = Json.GetInt(od, "tint", 0),
+                    amount = Json.GetFloat(od, "amount", 0f),
+                    count = Json.GetInt(od, "count", 0),
+                    tag = (uint)Json.GetInt(od, "tag", 0),
+                    socket = Json.GetStr(od, "socket", ""),
+                    px = Json.GetFloat(od, "px", 0f),
+                    py = Json.GetFloat(od, "py", 0f),
+                    pz = Json.GetFloat(od, "pz", 0f),
+                    rx = Json.GetFloat(od, "rx", 0f),
+                    ry = Json.GetFloat(od, "ry", 0f),
+                    rz = Json.GetFloat(od, "rz", 0f),
+                    rw = Json.GetFloat(od, "rw", 1f),
+                };
+                if (!string.IsNullOrEmpty(r.id)) list.Add(r);
+            }
+            return list;
+        }
+    }
+
+    /// <summary>
+    /// 一件需要持久化的世界物品。
+    ///
+    /// 只记"重新造出来还需要什么"：
+    ///   - socket 非空 → 靠层级路径找回原来的插槽
+    ///   - socket 为空 → 按存下来的世界位姿直接摆
+    ///
+    /// tag 只记录、不还原：它是运行时网络句柄，重新生成一定拿到新值，
+    /// 硬塞回去会让手持/同步对不上。
+    /// </summary>
+    internal sealed class ItemRecord
+    {
+        public string id = "";
+        public int tint;            // Color32 的 rgba 打包成 int
+        public float amount;
+        public int count;
+        public uint tag;            // 仅记录，不还原
+        public string socket = "";  // socket 的层级路径；空 = 自由摆放
+        public float px, py, pz;
+        public float rx, ry, rz, rw;
     }
 
     internal static class CareerStore
@@ -124,6 +229,17 @@ namespace MaydayCareer
                 upgrades = ReadUpgrades(gs),
             };
 
+            // 座排：rowMask 是权威位图，seatRows 是逐位解出来的（兜底 + 排查用）
+            s.seatRowMask = ReadRowMask();
+            s.seatRows = ReadInstalledRows();
+            s.seatRowCount = ReadRowCount();
+
+            // 世界物品快照：座排之外，"客舱里的器材"全部来自补给站购买，
+            // 游戏自身完全不持久化，只能我们自己扫场景存下来。
+            int skipped = 0;
+            if (Plugin.SaveItems.Value) s.items = RecordItems(out skipped);
+            else Plugin.LogSource.LogInfo("[MaydayCareer] 物品快照未启用（SaveItems=false）");
+
             Directory.CreateDirectory(_dir);
             string tmp = _file + ".tmp";
             File.WriteAllText(tmp, s.ToJson(), new UTF8Encoding(false));
@@ -131,8 +247,8 @@ namespace MaydayCareer
             File.Move(tmp, _file);
 
             Plugin.LogSource.LogInfo(string.Format(
-                "[MaydayCareer] 已保存 钱={0} 债={1} 第{2}段 升级={3} -> {4}",
-                s.money, s.debt, s.leg, s.upgrades.Count, _file));
+                "[MaydayCareer] 已保存 钱={0} 债={1} 第{2}段 升级={3} 座排={4} 物品={5} -> {6}",
+                s.money, s.debt, s.leg, s.upgrades.Count, s.seatRows.Count, s.items.Count, _file));
         }
 
         static List<string> ReadUpgrades(global::Mayday.GameState gs)
@@ -261,7 +377,8 @@ namespace MaydayCareer
             Plugin.LogSource.LogInfo(string.Format(
                 "[MaydayCareer] 已读档 钱 {0} -> {1}（存档 {2}） 债 {3} 第{4}段 机场{5} 升级 +{6}",
                 before, gs.Money, s.money, gs.Debt, gs.Leg, gs.CurrentAirport, added));
-            RebuildSeats();
+            RebuildSeats(s.seatRowMask, s.seatRows);
+            RestoreItemsOnLoad(s.items);
             DumpCatalog();
         }
 
@@ -289,7 +406,7 @@ namespace MaydayCareer
         /// 只标记"已经装好的排"，绝不新增排 —— 新增会改变座位容量，
         /// 破坏乘客分配和已经结算过的座位数。
         /// </summary>
-        public static void RebuildSeats()
+        public static void RebuildSeats(int savedRowMask, List<int> savedInstalled)
         {
             try
             {
@@ -325,8 +442,40 @@ namespace MaydayCareer
                 if (rows < 0) rows = 0;
                 if (rows > 64) rows = 64;
 
+                // ---- 座排补装 ----
+                // rowMask 是权威位图。存档里置位、而现在没装的排，
+                // 用游戏自己的 ServerInstallRow 补回去。
+                // 只补、绝不超装：新增排会改变座位容量，破坏乘客分配。
+                int targetMask = savedRowMask;
+                if (targetMask <= 0 && savedInstalled != null)
+                {
+                    // 兼容没有 seatRowMask 的旧存档（v1）：按 slot 列表拼出位图
+                    foreach (int slot in savedInstalled)
+                        if (slot >= 0 && slot < 8) targetMask |= 1 << slot;
+                }
+
+                int installed = 0;
+                for (int i = 0; i < 8; i++)
+                {
+                    if ((targetMask & (1 << i)) == 0) continue;
+                    try
+                    {
+                        if (pd.IsRowInstalled(i)) continue;
+                        pd.ServerInstallRow(i, want);
+                        installed++;
+                    }
+                    catch (Exception e)
+                    {
+                        Plugin.LogSource.LogWarning(string.Format(
+                            "[MaydayCareer] 第 {0} 排补装失败: {1}", i, e.Message));
+                    }
+                }
+
                 int done = 0;
-                for (int i = 0; i < rows; i++)
+                int visFixed = 0;
+                // rowMask 只有 8 位，逐位判断比依赖 RowCount 可靠
+                // （RowCount 的语义还没验死：已装数还是总槽位数）
+                for (int i = 0; i < 8; i++)
                 {
                     // 每排单独 try：某一排坏了不影响其余排
                     try
@@ -335,6 +484,32 @@ namespace MaydayCareer
                         var row = global::Mayday.Passengers.SeatRow.Get(i);
                         if (row == null) continue;
                         row.ServerSetPremium(want);
+
+                        // 视觉兜底：ServerSetPremium 依赖 SyncVar hook -> ApplyPremium。
+                        // host 本地理论上会立刻生效，但万一 hook 没触发、或 ApplyPremium
+                        // 被改成延迟执行，这里直接把 premiumVis 的开关掰到位。
+                        try
+                        {
+                            var vis = row.premiumVis;
+                            if (vis != null)
+                            {
+                                for (int k = 0; k < vis.Length; k++)
+                                {
+                                    var go = vis[k];
+                                    if (go == null) continue;
+                                    if (go.activeSelf != want)
+                                    {
+                                        go.SetActive(want);
+                                        visFixed++;
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            Plugin.LogSource.LogWarning(string.Format(
+                                "[MaydayCareer] 第 {0} 排视觉兜底失败: {1}", i, e.Message));
+                        }
                         done++;
                     }
                     catch (Exception e)
@@ -345,7 +520,8 @@ namespace MaydayCareer
                 }
 
                 Plugin.LogSource.LogInfo(string.Format(
-                    "[MaydayCareer] 座位重建 已装{0}排 premium={1}", done, want));
+                    "[MaydayCareer] 座位重建 补装{0}排 已装{1}排 premium={2}（RowCount={3}，视觉兜底{4}处）",
+                    installed, done, want, rows, visFixed));
             }
             catch (Exception e)
             {
@@ -478,7 +654,9 @@ namespace MaydayCareer
                 try { rows = pd.RowCount; } catch { }
                 bool prem = false;
                 try { prem = pd.PremiumSeats; } catch { }
-                Plugin.LogSource.LogInfo(string.Format(DumpTag + "座位 排数={0} 高级座={1}", rows, prem));
+                int mask = 0;
+                try { mask = pd.rowMask; } catch { }
+                Plugin.LogSource.LogInfo(string.Format(DumpTag + "座位 排数={0} rowMask={1} 高级座={2}", rows, mask, prem));
 
                 if (rows < 0) rows = 0;
                 if (rows > 64) rows = 64;
@@ -578,6 +756,414 @@ namespace MaydayCareer
         }
 
         static int TryCountStatic(Type type, string name) => TryCount(null, type, name);
+
+        // ---------- 座排读数 ----------
+
+        /// <summary>
+        /// rowMask 是 PassengerDirector 的 SyncVar 位图，第 i 位 = 第 i 排已装。
+        /// 这是"装了几排"唯一无歧义的来源 —— RowCount 到底是已装数还是总槽位数
+        /// 还没验死，不能当依据。
+        /// </summary>
+        static int ReadRowMask()
+        {
+            try
+            {
+                var pd = global::Mayday.Passengers.PassengerDirector.Instance;
+                if (pd == null) return 0;
+                return pd.rowMask;
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 读 rowMask 失败: " + e.Message);
+                return 0;
+            }
+        }
+
+        static int ReadRowCount()
+        {
+            try
+            {
+                var pd = global::Mayday.Passengers.PassengerDirector.Instance;
+                if (pd == null) return 0;
+                return pd.RowCount;
+            }
+            catch { return 0; }
+        }
+
+        /// <summary>逐位解出已装排的 slot 列表（位图的冗余副本，用于排查和旧存档兜底）。</summary>
+        static List<int> ReadInstalledRows()
+        {
+            var list = new List<int>();
+            try
+            {
+                var pd = global::Mayday.Passengers.PassengerDirector.Instance;
+                if (pd == null) return list;
+                for (int i = 0; i < 8; i++)
+                {
+                    try { if (pd.IsRowInstalled(i)) list.Add(i); }
+                    catch { }
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 读座排状态失败: " + e.Message);
+            }
+            return list;
+        }
+
+        // ---------- 世界物品：存 ----------
+
+        /// <summary>
+        /// 扫场景里所有 Item，把"值得跨局保留"的记下来。
+        ///
+        /// 为什么只存这些：游戏对世界物品完全没有持久化，落地/换机场时
+        /// 客舱里花钱买的器材全都会消失。行李则相反 —— 结算会主动清，
+        /// 存了反而会把上一趟的包带到下一趟。
+        /// </summary>
+        static List<ItemRecord> RecordItems(out int skipped)
+        {
+            skipped = 0;
+            var list = new List<ItemRecord>();
+            try
+            {
+                var arr = UnityEngine.Object.FindObjectsOfType<global::Mayday.Item>();
+                if (arr == null)
+                {
+                    Plugin.LogSource.LogWarning("[MaydayCareer] 物品快照 扫描失败（FindObjectsOfType 返回空）");
+                    return list;
+                }
+
+                for (int i = 0; i < arr.Length; i++)
+                {
+                    try
+                    {
+                        var it = arr[i];
+                        if (it == null) { continue; }
+                        if (!IsPersistable(it)) { skipped++; continue; }
+                        list.Add(CaptureItem(it));
+                    }
+                    catch (Exception e)
+                    {
+                        skipped++;
+                        Plugin.LogSource.LogWarning("[MaydayCareer] 第 " + i + " 件物品读取失败: " + e.Message);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 物品快照异常: " + e.Message);
+            }
+
+            Plugin.LogSource.LogInfo(string.Format(
+                "[MaydayCareer] 物品快照 已记录 {0} 件（跳过 {1} 件）", list.Count, skipped));
+            return list;
+        }
+
+        /// <summary>
+        /// 是否值得存。白名单按分类走：
+        ///   Galley / Cabin / Cleaning / Maintenance / Crate 存
+        ///   Luggage（行李，结算会清）、Misc（pax_carry / player_carry / 炸弹等运行时临时物）不存
+        /// 另外排除手持物。
+        /// </summary>
+        static bool IsPersistable(global::Mayday.Item it)
+        {
+            try { if (it.IsHeld) return false; }
+            catch { return false; }
+
+            global::Mayday.ItemInfo info = null;
+            try { info = it.Info; }
+            catch { return false; }
+            if (info == null) return false;
+
+            try
+            {
+                switch (info.category)
+                {
+                    case global::Mayday.ItemCategory.Galley:
+                    case global::Mayday.ItemCategory.Cabin:
+                    case global::Mayday.ItemCategory.Cleaning:
+                    case global::Mayday.ItemCategory.Maintenance:
+                    case global::Mayday.ItemCategory.Crate:
+                        return true;
+                    default:
+                        return false;
+                }
+            }
+            catch { return false; }
+        }
+
+        static ItemRecord CaptureItem(global::Mayday.Item it)
+        {
+            var r = new ItemRecord();
+            r.id = it.itemId ?? "";
+            try { r.amount = it.Amount; } catch { }
+            try { r.count = it.Count; } catch { }
+            try { r.tag = it.Tag; } catch { }
+            try { r.tint = PackTint(it.Tint); } catch { }
+
+            // 归属：优先记插槽路径，找不到插槽才退回世界位姿
+            try
+            {
+                var sock = it.Socket;
+                if (sock != null) r.socket = PathOf(sock.transform) ?? "";
+            }
+            catch { }
+
+            try
+            {
+                var t = it.transform;
+                var p = t.position;
+                var q = t.rotation;
+                r.px = p.x; r.py = p.y; r.pz = p.z;
+                r.rx = q.x; r.ry = q.y; r.rz = q.z; r.rw = q.w;
+            }
+            catch
+            {
+                try
+                {
+                    var p = it.syncPos;
+                    var q = it.syncRot;
+                    r.px = p.x; r.py = p.y; r.pz = p.z;
+                    r.rx = q.x; r.ry = q.y; r.rz = q.z; r.rw = q.w;
+                }
+                catch { }
+            }
+
+            return r;
+        }
+
+        /// <summary>
+        /// transform 的层级路径，形如 "Plane/Cabin/Row0#2/Socket#0"。
+        ///
+        /// 为什么不用世界坐标：站点会被 GroundCrew 重新锚定到下一个机场，
+        /// 世界的绝对位置在存读之间会变，但舱内层级结构不变。
+        /// </summary>
+        static string PathOf(UnityEngine.Transform t)
+        {
+            if (t == null) return "";
+            var parts = new List<string>();
+            int guard = 0;
+            while (t != null && guard++ < 64)
+            {
+                int idx = 0;
+                try { idx = t.GetSiblingIndex(); } catch { }
+                string nm = "";
+                try { nm = t.name; } catch { }
+                parts.Add((string.IsNullOrEmpty(nm) ? "?" : nm) + "#" + idx);
+                try { t = t.parent; } catch { t = null; }
+            }
+            parts.Reverse();
+            return string.Join("/", parts.ToArray());
+        }
+
+        // ---------- 世界物品：读 ----------
+
+        const int MaxRestoreTries = 3;
+
+        static List<ItemRecord> _pendingItems;
+        static bool _restorePending;
+        static int _restoreTries;
+
+        /// <summary>
+        /// 读档后立刻尝试补物品；同时把"待补"标记挂上，
+        /// 让 GroundCrew 重新锚定站点之后再补一次。
+        ///
+        /// 为什么两处都补：手动热键通常发生在站点已经就绪之后，立刻就能补上；
+        /// 自动模式下读档发生在 ServerResetRun，那时机舱/站点还没建，
+        /// 必须等 GroundCrew.ServerReanchor 之后。
+        /// </summary>
+        static void RestoreItemsOnLoad(List<ItemRecord> saved)
+        {
+            _pendingItems = saved;
+            _restoreTries = 0;
+
+            if (saved == null || saved.Count == 0)
+            {
+                _restorePending = false;
+                return;
+            }
+
+            if (!Plugin.LoadItems.Value)
+            {
+                _restorePending = false;
+                Plugin.LogSource.LogInfo(
+                    "[MaydayCareer] 物品重建未启用（LoadItems=false），存档里有 " + saved.Count + " 件");
+                return;
+            }
+
+            _restorePending = true;
+            RestoreItems(saved);
+        }
+
+        /// <summary>GroundCrew 把站点重建好之后调用（见 ReanchorHook）。</summary>
+        public static void OnSiteReanchored()
+        {
+            if (!_restorePending) return;
+            if (_restoreTries >= MaxRestoreTries) return;
+            RestoreItems(_pendingItems);
+        }
+
+        /// <summary>
+        /// 按存档补物品。幂等：先数场景里已有的同 id 物品，只补差额，
+        /// 所以反复读档不会刷物品。
+        /// </summary>
+        static void RestoreItems(List<ItemRecord> want)
+        {
+            _restoreTries++;
+            try
+            {
+                if (want == null || want.Count == 0) { _restorePending = false; return; }
+
+                var sockets = IndexSockets();
+                var have = CountItemsById();
+
+                int ok = 0, spawnFail = 0, socketMiss = 0;
+
+                foreach (var r in want)
+                {
+                    if (r == null || string.IsNullOrEmpty(r.id)) { continue; }
+
+                    // 已经有一件了 → 不重复生成
+                    if (have.TryGetValue(r.id, out var n) && n > 0)
+                    {
+                        have[r.id] = n - 1;
+                        ok++;
+                        continue;
+                    }
+
+                    try
+                    {
+                        var item = SpawnOne(r);
+                        if (item == null) { spawnFail++; continue; }
+
+                        if (!string.IsNullOrEmpty(r.socket))
+                        {
+                            global::Mayday.ItemSocket sock = null;
+                            if (!sockets.TryGetValue(r.socket, out sock) || sock == null || !sock.IsEmpty)
+                            {
+                                // 插槽找不到 / 已被占 → 退回按存的世界位姿摆，并计数
+                                socketMiss++;
+                                TryPlaceRaw(item, r);
+                            }
+                            else
+                            {
+                                bool inserted = false;
+                                try { inserted = sock.ServerInsert(item); }
+                                catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 插入插槽失败: " + e.Message); }
+                                if (!inserted)
+                                {
+                                    try { item.ServerAttachToSocket(sock); inserted = true; }
+                                    catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 挂接插槽失败: " + e.Message); }
+                                }
+                                if (!inserted) { socketMiss++; TryPlaceRaw(item, r); }
+                            }
+                        }
+
+                        ok++;
+                    }
+                    catch (Exception e)
+                    {
+                        spawnFail++;
+                        Plugin.LogSource.LogWarning(string.Format(
+                            "[MaydayCareer] 重建物品 {0} 失败: {1}", r.id, e.Message));
+                    }
+                }
+
+                Plugin.LogSource.LogInfo(string.Format(
+                    "[MaydayCareer] 物品重建 成功 {0} / 目标 {1}，socket 未命中 {2}（生成失败 {3}，第 {4} 次）",
+                    ok, want.Count, socketMiss, spawnFail, _restoreTries));
+
+                // 全齐了就不再重试；否则留给下一次 GroundCrew 重锚再补
+                if (ok >= want.Count) _restorePending = false;
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogError("[MaydayCareer] 物品重建异常: " + e);
+            }
+        }
+
+        static Dictionary<string, global::Mayday.ItemSocket> IndexSockets()
+        {
+            var map = new Dictionary<string, global::Mayday.ItemSocket>(StringComparer.Ordinal);
+            try
+            {
+                var arr = UnityEngine.Object.FindObjectsOfType<global::Mayday.ItemSocket>();
+                if (arr == null) return map;
+                for (int i = 0; i < arr.Length; i++)
+                {
+                    var s = arr[i];
+                    if (s == null) continue;
+                    try
+                    {
+                        string p = PathOf(s.transform);
+                        if (!string.IsNullOrEmpty(p) && !map.ContainsKey(p)) map[p] = s;
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 扫描插槽失败: " + e.Message);
+            }
+            return map;
+        }
+
+        /// <summary>场景里现有物品按 itemId 计数（不做过滤，宁可少补也不要重复）。</summary>
+        static Dictionary<string, int> CountItemsById()
+        {
+            var map = new Dictionary<string, int>(StringComparer.Ordinal);
+            try
+            {
+                var arr = UnityEngine.Object.FindObjectsOfType<global::Mayday.Item>();
+                if (arr == null) return map;
+                for (int i = 0; i < arr.Length; i++)
+                {
+                    var it = arr[i];
+                    if (it == null) continue;
+                    string id = null;
+                    try { id = it.itemId; } catch { }
+                    if (string.IsNullOrEmpty(id)) continue;
+                    map.TryGetValue(id, out var c);
+                    map[id] = c + 1;
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 统计现有物品失败: " + e.Message);
+            }
+            return map;
+        }
+
+        static global::Mayday.Item SpawnOne(ItemRecord r)
+        {
+            var pos = new UnityEngine.Vector3(r.px, r.py, r.pz);
+            var rot = new UnityEngine.Quaternion(r.rx, r.ry, r.rz, r.rw);
+            var item = global::Mayday.Item.ServerSpawn(r.id, pos, rot, null, false);
+            if (item == null) return null;
+
+            // 染色/数量尽力还原；Tag 是运行时网络句柄，故意不还原
+            try { if (r.tint != 0) item.Tint = UnpackTint(r.tint); }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 还原染色失败: " + e.Message); }
+            try { if (r.amount > 0f) item.Amount = r.amount; } catch { }
+            try { if (r.count > 0) item.Count = r.count; } catch { }
+
+            return item;
+        }
+
+        static void TryPlaceRaw(global::Mayday.Item item, ItemRecord r)
+        {
+            try { item.transform.position = new UnityEngine.Vector3(r.px, r.py, r.pz); } catch { }
+            try { item.transform.rotation = new UnityEngine.Quaternion(r.rx, r.ry, r.rz, r.rw); } catch { }
+        }
+
+        // Color32 有 rgba 联合体，打包成 int 存，读回来用四参构造
+        static int PackTint(UnityEngine.Color32 c)
+            => (c.a << 24) | (c.b << 16) | (c.g << 8) | c.r;
+
+        static UnityEngine.Color32 UnpackTint(int v)
+            => new UnityEngine.Color32(
+                (byte)(v & 0xFF), (byte)((v >> 8) & 0xFF),
+                (byte)((v >> 16) & 0xFF), (byte)((v >> 24) & 0xFF));
 
         static void Try(string what, Action act)
         {

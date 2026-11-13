@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "0.6.0";
+        public const string Version = "0.7.0";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
@@ -32,6 +32,8 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> AutoLoadOnStart;
         internal static ConfigEntry<string> LoadKey;
         internal static ConfigEntry<bool> DumpOnLoad;
+        internal static ConfigEntry<bool> SaveItems;
+        internal static ConfigEntry<bool> LoadItems;
 
         public override void Load()
         {
@@ -84,6 +86,21 @@ namespace MaydayCareer
                 "读档成功后把升级目录 / 物品目录 / 座位状态 / 补给站状态打进日志。\n" +
                 "这是排查用的：interop 里读不到字符串字面量，「哪个升级会送什么实物」只能运行时打出来。\n" +
                 "确认没问题之后关掉，日志会干净很多。");
+
+            SaveItems = Config.Bind(
+                "General",
+                "SaveItems",
+                true,
+                "存盘时把客舱里花钱买的器材（灭火器、锤子、胶带、油桶、座位套件等）一起存进 career.json。\n" +
+                "游戏本身完全不持久化世界物品，关掉这项就等于回到 0.6.0 的行为。\n" +
+                "已排除：行李（Luggage 分类，游戏结算会自己清）、手持物、以及 Misc 分类的运行时临时物。");
+
+            LoadItems = Config.Bind(
+                "General",
+                "LoadItems",
+                true,
+                "读档时把存档里的器材补回场景（幂等：已有同 id 物品就不再生成）。\n" +
+                "站点重建（GroundCrew.ServerReanchor）之后会自动再补一次，最多重试 3 次。");
 
             LogSource.LogInfo("[MaydayCareer] 已加载 v" + Version);
 

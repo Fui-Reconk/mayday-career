@@ -167,5 +167,25 @@ namespace MaydayCareer
                     if (o is string s) outList.Add(s);
             return outList;
         }
+
+        /// <summary>数字数组，用于 seatRows 这种小整数列表。</summary>
+        public static List<int> GetIntList(Dictionary<string, object> d, string k)
+        {
+            var outList = new List<int>();
+            if (d != null && d.TryGetValue(k, out var v) && v is List<object> arr)
+                foreach (var o in arr)
+                    if (o is double dv) outList.Add((int)Math.Round(dv));
+            return outList;
+        }
+
+        /// <summary>对象数组，用于 items 这种记录列表。</summary>
+        public static List<Dictionary<string, object>> GetObjList(Dictionary<string, object> d, string k)
+        {
+            var outList = new List<Dictionary<string, object>>();
+            if (d != null && d.TryGetValue(k, out var v) && v is List<object> arr)
+                foreach (var o in arr)
+                    if (o is Dictionary<string, object> od) outList.Add(od);
+            return outList;
+        }
     }
 }
