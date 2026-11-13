@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Text;
 
 namespace MaydayCareer
@@ -260,7 +261,323 @@ namespace MaydayCareer
             Plugin.LogSource.LogInfo(string.Format(
                 "[MaydayCareer] 已读档 钱 {0} -> {1}（存档 {2}） 债 {3} 第{4}段 机场{5} 升级 +{6}",
                 before, gs.Money, s.money, gs.Debt, gs.Leg, gs.CurrentAirport, added));
+            RebuildSeats();
+            DumpCatalog();
         }
+
+        // ---------- 实体重建 ----------
+
+        /// <summary>
+        /// 把"已购升级"重新落到实体上。
+        ///
+        /// 为什么必须有这一步：GameState.Upgrades 只是一本购买台账，
+        /// 升级的真实效果是购买那一刻由别的系统生成的世界对象。
+        /// 多数系统自己有定时轮询会自愈（GalleySystem.PollUpgrades、
+        /// CargoNets.ownedCheck、CargoLoaders.ownedCheck），
+        /// 但座位高级化没有任何轮询 —— 只有玩家买下升级时才会调一次
+        /// PassengerDirector.ServerSetPremium。所以只把列表写回去，
+        /// 座位这一路永远没人读，表现就是"升级买了、座位没变"。
+        ///
+        /// 这里全程用 public API，不反射私有方法：
+        ///   PassengerDirector.Instance              public static get
+        ///   PassengerDirector.premiumSeats          SyncVar 属性
+        ///   PassengerDirector.RowCount              public get
+        ///   PassengerDirector.IsRowInstalled(int)   public
+        ///   SeatRow.Get(int)                        public static
+        ///   SeatRow.ServerSetPremium(bool)          public
+        ///
+        /// 只标记"已经装好的排"，绝不新增排 —— 新增会改变座位容量，
+        /// 破坏乘客分配和已经结算过的座位数。
+        /// </summary>
+        public static void RebuildSeats()
+        {
+            try
+            {
+                var pd = global::Mayday.Passengers.PassengerDirector.Instance;
+                if (pd == null)
+                {
+                    Plugin.LogSource.LogWarning(
+                        "[MaydayCareer] 座位重建跳过：PassengerDirector 还没就绪（站点/机舱未建），进机舱后再按一次读档键");
+                    return;
+                }
+
+                var gs = global::Mayday.GameState.Instance;
+                if (gs == null)
+                {
+                    Plugin.LogSource.LogWarning("[MaydayCareer] 座位重建跳过：GameState 为空");
+                    return;
+                }
+
+                // 升级 id 取游戏自己的静态常量，不硬编码 "seat_premium"
+                bool want = false;
+                try { want = gs.HasUpgrade(global::Mayday.Airport.UpgradeCatalog.SeatPremium); }
+                catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 读取 SeatPremium 升级状态失败: " + e.Message); }
+
+                // SyncVar：写下去会标脏并同步给客户端，队友看得到
+                try { pd.premiumSeats = want; }
+                catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 写 premiumSeats 失败: " + e.Message); }
+
+                int rows = 0;
+                try { rows = pd.RowCount; }
+                catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 读取 RowCount 失败: " + e.Message); }
+
+                // 兜底上限：万一 RowCount 返回到离谱的值，别在这里死循环
+                if (rows < 0) rows = 0;
+                if (rows > 64) rows = 64;
+
+                int done = 0;
+                for (int i = 0; i < rows; i++)
+                {
+                    // 每排单独 try：某一排坏了不影响其余排
+                    try
+                    {
+                        if (!pd.IsRowInstalled(i)) continue;
+                        var row = global::Mayday.Passengers.SeatRow.Get(i);
+                        if (row == null) continue;
+                        row.ServerSetPremium(want);
+                        done++;
+                    }
+                    catch (Exception e)
+                    {
+                        Plugin.LogSource.LogWarning(string.Format(
+                            "[MaydayCareer] 第 {0} 排座位设置失败: {1}", i, e.Message));
+                    }
+                }
+
+                Plugin.LogSource.LogInfo(string.Format(
+                    "[MaydayCareer] 座位重建 已装{0}排 premium={1}", done, want));
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogError("[MaydayCareer] 座位重建异常: " + e);
+            }
+        }
+
+        // ---------- 诊断导出 ----------
+
+        const string DumpTag = "[MaydayCareer][dump] ";
+
+        /// <summary>
+        /// 排查用：把升级目录 / 物品目录 / 座位状态 / 补给站状态整个打一遍。
+        ///
+        /// 为什么需要它：interop 是托管 stub，不含字符串字面量，
+        /// 所以 UpgradeInfo.deliverItem 之类"哪个升级会送什么实物"的值
+        /// 离线根本读不到，只能运行时打出来。这份日志是后续做
+        /// "实物投递重放"的唯一数据来源。
+        ///
+        /// 稳定之后把 DumpOnLoad 关掉即可。整段全包在 try/catch 里，
+        /// 任何一步失败都只打 warn，绝不会把读档搞崩。
+        /// </summary>
+        public static void DumpCatalog()
+        {
+            if (!Plugin.DumpOnLoad.Value) return;
+            try { Plugin.LogSource.LogInfo(DumpTag + "===== 开始导出目录 ====="); }
+            catch { return; }
+
+            DumpUpgradeCatalog();
+            DumpItemCatalog();
+            DumpSeatState();
+            DumpSupplyShop();
+
+            Plugin.LogSource.LogInfo(DumpTag + "===== 导出结束 =====");
+        }
+
+        static void DumpUpgradeCatalog()
+        {
+            try
+            {
+                var list = AsList<global::Mayday.Airport.UpgradeInfo>(global::Mayday.Airport.UpgradeCatalog.All);
+                if (list == null)
+                {
+                    Plugin.LogSource.LogWarning(DumpTag + "升级目录为空（UpgradeCatalog.All 拿不到 List），跳过");
+                    return;
+                }
+
+                int n = list.Count;
+                Plugin.LogSource.LogInfo(DumpTag + "升级目录 共 " + n + " 项");
+                for (int i = 0; i < n; i++)
+                {
+                    try
+                    {
+                        var u = list[i];
+                        if (u == null) { Plugin.LogSource.LogInfo(DumpTag + "升级 [null]"); continue; }
+
+                        string deliver = null;
+                        try { deliver = u.deliverItem; } catch { }
+                        if (string.IsNullOrEmpty(deliver)) deliver = "-";
+
+                        string req = null;
+                        try { req = u.requires; } catch { }
+                        if (string.IsNullOrEmpty(req)) req = "-";
+
+                        Plugin.LogSource.LogInfo(string.Format(
+                            "{0}升级 id={1} 价格={2} 分类={3} 上限={4} 可重复={5} 消耗品={6} 投递物={7} 投递数={8} 染色={9} 前置={10}",
+                            DumpTag,
+                            u.id, u.price, u.category, u.maxLevel, u.Repeatable,
+                            u.consumable, deliver, u.deliverCount, u.deliverTinted, req));
+                    }
+                    catch (Exception e)
+                    {
+                        Plugin.LogSource.LogWarning(DumpTag + "第 " + i + " 项升级读不出来: " + e.Message);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning(DumpTag + "升级目录导出失败: " + e.Message);
+            }
+        }
+
+        static void DumpItemCatalog()
+        {
+            try
+            {
+                var list = AsList<global::Mayday.ItemInfo>(global::Mayday.ItemCatalog.All);
+                if (list == null)
+                {
+                    Plugin.LogSource.LogWarning(DumpTag + "物品目录为空（ItemCatalog.All 拿不到 List），跳过");
+                    return;
+                }
+
+                int n = list.Count;
+                Plugin.LogSource.LogInfo(DumpTag + "物品目录 共 " + n + " 项");
+                for (int i = 0; i < n; i++)
+                {
+                    try
+                    {
+                        var it = list[i];
+                        if (it == null) { Plugin.LogSource.LogInfo(DumpTag + "物品 [null]"); continue; }
+                        Plugin.LogSource.LogInfo(string.Format(
+                            "{0}物品 id={1} 价格={2} 商店={3} 分类={4}",
+                            DumpTag, it.id, it.price, it.shop, it.category));
+                    }
+                    catch (Exception e)
+                    {
+                        Plugin.LogSource.LogWarning(DumpTag + "第 " + i + " 项物品读不出来: " + e.Message);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning(DumpTag + "物品目录导出失败: " + e.Message);
+            }
+        }
+
+        static void DumpSeatState()
+        {
+            try
+            {
+                var pd = global::Mayday.Passengers.PassengerDirector.Instance;
+                if (pd == null)
+                {
+                    Plugin.LogSource.LogInfo(DumpTag + "座位 状态：PassengerDirector 为空（机舱未就绪）");
+                    return;
+                }
+
+                int rows = 0;
+                try { rows = pd.RowCount; } catch { }
+                bool prem = false;
+                try { prem = pd.PremiumSeats; } catch { }
+                Plugin.LogSource.LogInfo(string.Format(DumpTag + "座位 排数={0} 高级座={1}", rows, prem));
+
+                if (rows < 0) rows = 0;
+                if (rows > 64) rows = 64;
+                for (int i = 0; i < rows; i++)
+                {
+                    try
+                    {
+                        Plugin.LogSource.LogInfo(string.Format(
+                            DumpTag + "座位 第{0}排 已装={1}", i, pd.IsRowInstalled(i)));
+                    }
+                    catch (Exception e)
+                    {
+                        Plugin.LogSource.LogWarning(DumpTag + "第 " + i + " 排状态读不出来: " + e.Message);
+                    }
+                }
+
+                // ServerAll 是 interop 里的静态列表，可见性不确定 → 走反射兜底
+                int kits = TryCountStatic(typeof(global::Mayday.Passengers.SeatKitItem), "ServerAll");
+                Plugin.LogSource.LogInfo(DumpTag + "座位 套件在场数量=" + (kits < 0 ? "读不到" : kits.ToString()));
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning(DumpTag + "座位状态导出失败: " + e.Message);
+            }
+        }
+
+        static void DumpSupplyShop()
+        {
+            try
+            {
+                var shop = global::Mayday.Airport.SupplyShop.Instance;
+                if (shop == null)
+                {
+                    Plugin.LogSource.LogInfo(DumpTag + "补给站 为空（机场站点未就绪）");
+                    return;
+                }
+
+                // backlog 大概率是 private [SerializeField]，编译期访问不到 → 反射兜底
+                int backlog = TryCount(shop, typeof(global::Mayday.Airport.SupplyShop), "backlog");
+                Plugin.LogSource.LogInfo(DumpTag + "补给站 有 投递积压=" + (backlog < 0 ? "读不到" : backlog.ToString()));
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning(DumpTag + "补给站状态导出失败: " + e.Message);
+            }
+        }
+
+        /// <summary>
+        /// 把 Catalog.All 这类 IReadOnlyList&lt;T&gt; 转成真正带 Count/索引器的 List&lt;T&gt;。
+        /// interop 生成的 IReadOnlyList 接口桩上没有 Count，只能转回 List 再用。
+        /// 转不了返回 null（调用方打 warn 跳过）。
+        /// </summary>
+        static Il2CppSystem.Collections.Generic.List<T> AsList<T>(Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase src)
+            where T : Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase
+        {
+            if (src == null) return null;
+            try
+            {
+                var direct = src as Il2CppSystem.Collections.Generic.List<T>;
+                if (direct != null) return direct;
+                return src.TryCast<Il2CppSystem.Collections.Generic.List<T>>();
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning(DumpTag + "List 转换失败: " + e.Message);
+                return null;
+            }
+        }
+
+        /// <summary>反射读某个实例/静态成员里的 Count，读不到返回 -1。</summary>
+        static int TryCount(object target, Type type, string name)
+        {
+            try
+            {
+                var flags = BindingFlags.Public | BindingFlags.NonPublic |
+                            (target == null ? BindingFlags.Static : BindingFlags.Instance);
+
+                object v = null;
+                var pi = type.GetProperty(name, flags);
+                if (pi != null) { try { v = pi.GetValue(target); } catch { } }
+                if (v == null)
+                {
+                    var fi = type.GetField(name, flags);
+                    if (fi != null) { try { v = fi.GetValue(target); } catch { } }
+                }
+                if (v == null) return -1;
+
+                var cp = v.GetType().GetProperty("Count", BindingFlags.Public | BindingFlags.Instance);
+                if (cp == null) return -1;
+                return Convert.ToInt32(cp.GetValue(v));
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning(DumpTag + "反射读 " + name + " 失败: " + e.Message);
+                return -1;
+            }
+        }
+
+        static int TryCountStatic(Type type, string name) => TryCount(null, type, name);
 
         static void Try(string what, Action act)
         {

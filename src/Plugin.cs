@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "0.5.0";
+        public const string Version = "0.6.0";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
@@ -31,6 +31,7 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> SaveOnCrash;
         internal static ConfigEntry<bool> AutoLoadOnStart;
         internal static ConfigEntry<string> LoadKey;
+        internal static ConfigEntry<bool> DumpOnLoad;
 
         public override void Load()
         {
@@ -75,6 +76,14 @@ namespace MaydayCareer
                 "LoadKey",
                 "F9",
                 "手动读档热键。取 UnityEngine.InputSystem.Key 的名字，例如 F9 / F10 / K。");
+
+            DumpOnLoad = Config.Bind(
+                "Debug",
+                "DumpOnLoad",
+                true,
+                "读档成功后把升级目录 / 物品目录 / 座位状态 / 补给站状态打进日志。\n" +
+                "这是排查用的：interop 里读不到字符串字面量，「哪个升级会送什么实物」只能运行时打出来。\n" +
+                "确认没问题之后关掉，日志会干净很多。");
 
             LogSource.LogInfo("[MaydayCareer] 已加载 v" + Version);
 
