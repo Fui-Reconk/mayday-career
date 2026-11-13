@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "0.7.0";
+        public const string Version = "0.8.0";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
@@ -34,6 +34,7 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> DumpOnLoad;
         internal static ConfigEntry<bool> SaveItems;
         internal static ConfigEntry<bool> LoadItems;
+        internal static ConfigEntry<string> SaveKey;
 
         public override void Load()
         {
@@ -78,6 +79,14 @@ namespace MaydayCareer
                 "LoadKey",
                 "F9",
                 "手动读档热键。取 UnityEngine.InputSystem.Key 的名字，例如 F9 / F10 / K。");
+
+            SaveKey = Config.Bind(
+                "General",
+                "SaveKey",
+                "J",
+                "手动存盘热键。在机舱里按一下就会立刻写 career.json，不用飞完一趟。\n" +
+                "取 UnityEngine.InputSystem.Key 的名字，例如 J / F10 / L。\n" +
+                "只在房主 / 服务端有效（纯客户端按了只打日志，不写盘）。");
 
             DumpOnLoad = Config.Bind(
                 "Debug",

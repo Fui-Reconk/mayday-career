@@ -72,7 +72,8 @@ namespace MaydayCareer
                         CareerStore.LogNetworkMode();
                         if (Plugin.AutoLoadOnStart.Value) CareerStore.ApplyOnce();
                         else Plugin.LogSource.LogInfo(
-                            "[MaydayCareer] 手动模式：按 " + Plugin.LoadKey.Value + " 读档（" + CareerStore.FilePath + "）");
+                            "[MaydayCareer] 手动模式：按 " + Plugin.LoadKey.Value + " 读档、" +
+                            Plugin.SaveKey.Value + " 存盘（" + CareerStore.FilePath + "）");
                         break;
 
                     // 落地 / 下一段周转：都是成功飞行之后，可以安全存盘。

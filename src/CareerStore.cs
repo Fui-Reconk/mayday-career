@@ -35,6 +35,12 @@ namespace MaydayCareer
         // 世界物品快照（不含行李和手持物）
         public List<ItemRecord> items = new List<ItemRecord>();
 
+        // 下面两个只是"这份 JSON 里到底有没有这两个字段"的标记，不参与序列化。
+        // 用途：区分"v1 旧存档压根没这些数据"和"有数据但恰好是空的" ——
+        // 前者要显式警告，后者是正常状态，不能混为一谈。
+        public bool hasSeatRowField;
+        public bool hasItemsField;
+
         public string ToJson()
         {
             var sb = new StringBuilder();
@@ -103,6 +109,8 @@ namespace MaydayCareer
                 seatRowCount = Json.GetInt(d, "seatRowCount", 0),
                 seatRows = Json.GetIntList(d, "seatRows"),
                 items = ParseItems(d),
+                hasSeatRowField = d.ContainsKey("seatRowMask") || d.ContainsKey("seatRows"),
+                hasItemsField = d.ContainsKey("items"),
             };
             return s;
         }
@@ -344,6 +352,17 @@ namespace MaydayCareer
             var gs = global::Mayday.GameState.Instance;
             if (gs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] GameState 为空，无法读档"); return; }
 
+            // 旧存档必须显式喊出来。
+            // 否则表现是"读档成功、座位重建补装0排、物品重建目标0件" ——
+            // 用户看到的是一串成功日志却什么都没变，纯静默空转。
+            if (IsLegacySave(s))
+            {
+                Plugin.LogSource.LogWarning(
+                    "[MaydayCareer] 存档是 v1 旧格式：没有座排位图与物品快照，本次只能还原钱/进度/升级。");
+                Plugin.LogSource.LogWarning(
+                    "[MaydayCareer] 进机舱后按 " + Plugin.SaveKey.Value + " 存一次盘即可升级到 v2。");
+            }
+
             int before = gs.Money;
 
             // 走游戏自己的 API，而不是直接写字段：
@@ -377,9 +396,58 @@ namespace MaydayCareer
             Plugin.LogSource.LogInfo(string.Format(
                 "[MaydayCareer] 已读档 钱 {0} -> {1}（存档 {2}） 债 {3} 第{4}段 机场{5} 升级 +{6}",
                 before, gs.Money, s.money, gs.Debt, gs.Leg, gs.CurrentAirport, added));
-            RebuildSeats(s.seatRowMask, s.seatRows);
+            RebuildSeats(s.seatRowMask, s.seatRows, s.hasSeatRowField);
             RestoreItemsOnLoad(s.items);
-            DumpCatalog();
+            DumpCatalog(s);
+        }
+
+        /// <summary>
+        /// 判断这份存档是不是"根本没有 v2 数据"。
+        ///
+        /// 依据是 JSON 里有没有这两个字段，而不是值是不是空 ——
+        /// 一个正常 v2 存档完全可能物品数为 0（客舱就是空的），
+        /// 那不该被当成旧档。
+        /// </summary>
+        static bool IsLegacySave(CareerState s)
+        {
+            if (s == null) return false;
+            if (s.version < 2) return true;
+            return !s.hasSeatRowField && !s.hasItemsField;
+        }
+
+        /// <summary>
+        /// 手动存盘入口（热键用）。
+        ///
+        /// 和自动存盘的区别只有两处守卫：必须处在服务端，且 GameState 已就绪。
+        /// 纯客户端按热键时只打警告，绝不写盘 —— 否则客户端会用自己那份
+        /// 不完整的状态覆盖房主的存档。
+        /// </summary>
+        public static void SaveManual()
+        {
+            try
+            {
+                bool server = false;
+                try { server = global::Mirror.NetworkServer.active; } catch { }
+
+                if (!server)
+                {
+                    Plugin.LogSource.LogWarning(
+                        "[MaydayCareer] 手动存盘跳过：当前不是房主/服务端（纯客户端不写盘）");
+                    return;
+                }
+
+                if (global::Mayday.GameState.Instance == null)
+                {
+                    Plugin.LogSource.LogWarning("[MaydayCareer] 手动存盘跳过：GameState 还没就绪");
+                    return;
+                }
+
+                Save();
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogError("[MaydayCareer] 手动存盘异常: " + e);
+            }
         }
 
         // ---------- 实体重建 ----------
@@ -406,7 +474,7 @@ namespace MaydayCareer
         /// 只标记"已经装好的排"，绝不新增排 —— 新增会改变座位容量，
         /// 破坏乘客分配和已经结算过的座位数。
         /// </summary>
-        public static void RebuildSeats(int savedRowMask, List<int> savedInstalled)
+        public static void RebuildSeats(int savedRowMask, List<int> savedInstalled, bool hadSeatData)
         {
             try
             {
@@ -519,9 +587,18 @@ namespace MaydayCareer
                     }
                 }
 
-                Plugin.LogSource.LogInfo(string.Format(
-                    "[MaydayCareer] 座位重建 补装{0}排 已装{1}排 premium={2}（RowCount={3}，视觉兜底{4}处）",
-                    installed, done, want, rows, visFixed));
+                // 两种"什么都没补"必须分开说清楚：
+                //   有座排数据、补装 0 排 = 都装好了，正常
+                //   没有座排数据          = 存档太旧，补不了
+                // 混在一起用户会以为是 bug。
+                if (hadSeatData)
+                    Plugin.LogSource.LogInfo(string.Format(
+                        "[MaydayCareer] 座位重建 补装{0}排 已装{1}排 premium={2}（RowCount={3}，视觉兜底{4}处）",
+                        installed, done, want, rows, visFixed));
+                else
+                    Plugin.LogSource.LogInfo(string.Format(
+                        "[MaydayCareer] 座位重建 已装{0}排 premium={1}（存档无座排数据，跳过补装；RowCount={2}，视觉兜底{3}处）",
+                        done, want, rows, visFixed));
             }
             catch (Exception e)
             {
@@ -544,18 +621,44 @@ namespace MaydayCareer
         /// 稳定之后把 DumpOnLoad 关掉即可。整段全包在 try/catch 里，
         /// 任何一步失败都只打 warn，绝不会把读档搞崩。
         /// </summary>
-        public static void DumpCatalog()
+        public static void DumpCatalog(CareerState s)
         {
             if (!Plugin.DumpOnLoad.Value) return;
             try { Plugin.LogSource.LogInfo(DumpTag + "===== 开始导出目录 ====="); }
             catch { return; }
 
+            // 先报"这份存档带了什么"，再看场景 —— 顺序上更符合排查直觉
+            DumpSavedSnapshot(s);
             DumpUpgradeCatalog();
             DumpItemCatalog();
             DumpSeatState();
             DumpSupplyShop();
 
             Plugin.LogSource.LogInfo(DumpTag + "===== 导出结束 =====");
+        }
+
+        /// <summary>这份存档本身带了什么数据。区分"字段不存在"和"值是 0"。</summary>
+        static void DumpSavedSnapshot(CareerState s)
+        {
+            try
+            {
+                if (s == null) { Plugin.LogSource.LogInfo(DumpTag + "存档快照 读取失败"); return; }
+
+                Plugin.LogSource.LogInfo(string.Format(
+                    DumpTag + "存档快照 version={0} 升级={1} 座排={2}",
+                    s.version, s.upgrades == null ? 0 : s.upgrades.Count,
+                    s.hasSeatRowField ? s.seatRows.Count + "排(mask=" + s.seatRowMask + ")" : "无字段"));
+
+                int n = s.items == null ? 0 : s.items.Count;
+                if (!s.hasItemsField)
+                    Plugin.LogSource.LogInfo(DumpTag + "物品快照 存档记录=0 件（存档无 items 字段）");
+                else
+                    Plugin.LogSource.LogInfo(DumpTag + "物品快照 存档记录=" + n + " 件");
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning(DumpTag + "存档快照导出失败: " + e.Message);
+            }
         }
 
         static void DumpUpgradeCatalog()
