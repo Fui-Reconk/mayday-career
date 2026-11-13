@@ -231,6 +231,26 @@ grep -aq -F -f /tmp/pat.bin MaydayCareer.dll
 
 （ASCII 标识符如类型名、方法名在 `#Strings` heap 里是 UTF-8，直接 `grep` 就行——这就是为什么"方法名查得到、中文查不到"。）
 
+## 机体损伤：七个入口只有 jetHp 可读（部分解决）
+
+打洞本身是通的（`HullPanels.ServerBlowAt` 就是随机事件用的入口，改角度后每次能打中新面板），但**读不出洞在哪**。
+
+实测条件：F7 打洞，画面上出现明显破洞，日志 `打洞结果 成功=1`。
+
+| 入口 | 结果 |
+|---|---|
+| `holes[i]`（`SyncList<Vector4>` 索引器） | `Count` 会变（11→12），元素**全 (0,0,0,0)** |
+| `holes.objects[i]`（绕过索引器的内部列表） | **同样全零** → 不是 interop marshalling 问题，数据真不在托管层 |
+| `holePlaced[i]`（`Vector4[]`） | 长度 12，非空 0 |
+| `HoleOpen(slot)`（public 查询） | 计数 0 |
+| `holeViews[i].key` + `root.activeSelf` | 长度 12，活跃 0 |
+| `breaches`（`UInt16`，配 `Networkbreaches`） | 恒为 `0x0000`，与画面不符（位宽 16 与 12 个槽位只是巧合，不是位图） |
+| **`jetHp`（`float[]`，7 段）** | **唯一跟着变化且有意义的字段**，如 `[0,0,0,0,1,0,0]` |
+
+结论：**洞的几何数据不通过托管层暴露**。可持久化的只有「哪一段受损」（`jetHp`）以及内部的 `jetSync` / `sectSync` 位图，洞的位置与视觉无法还原。
+
+插件取舍：存 `breaches` / `jetHp` / `jetSync` / `sectSync` 并写回，保住「分段受损」这个状态；墙上不会重新出现洞，文档里如实标注，不假装支持。
+
 ## 待解决
 
 1. `ServerResetRun(int, int)` 两个参数的含义（seed？难度？）—— 影响能否连 `Leg`、`RunSeed` 一起还原

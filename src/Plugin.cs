@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "0.11.4";
+        public const string Version = "0.12.3";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
@@ -36,6 +36,8 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> LoadItems;
         internal static ConfigEntry<bool> SaveFuel;
         internal static ConfigEntry<bool> LoadFuel;
+        internal static ConfigEntry<bool> SaveHull;
+        internal static ConfigEntry<bool> LoadHull;
         internal static ConfigEntry<string> SaveKey;
 
         public override void Load()
@@ -124,6 +126,18 @@ namespace MaydayCareer
                 "LoadFuel",
                 true,
                 "读档时把油量写回 FuelSystem。写入后 3 秒会自动回读校验并打日志。");
+
+            SaveHull = Config.Bind(
+                "General",
+                "SaveHull",
+                true,
+                "存盘时记录机身破洞状态（breaches 掩码 + 分段血量）。");
+
+            LoadHull = Config.Bind(
+                "General",
+                "LoadHull",
+                true,
+                "读档时写回机身破洞状态。写入后 3 秒自动回读校验。");
 
             LogSource.LogInfo("[MaydayCareer] 已加载 v" + Version);
 

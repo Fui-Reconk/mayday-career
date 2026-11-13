@@ -33,6 +33,14 @@ namespace MaydayCareer
         public List<float> tanks = new List<float>();
         public bool hasFuelField;
 
+        // 机体损伤：breaches 是 16 位掩码，第 i 位 = 第 i 个破洞槽位开着。
+        // jetHp 是分段血量，jetSync/sectSync 是游戏内部的同步位图。
+        public int breaches;
+        public List<float> jetHp = new List<float>();
+        public string jetSync = "0";
+        public string sectSync = "0";
+        public bool hasHullField;
+
         public List<string> upgrades = new List<string>();
 
         // 座排：rowMask 是权威位图（PassengerDirector.rowMask 的 SyncVar），
@@ -80,6 +88,16 @@ namespace MaydayCareer
                 sb.Append(Json.Num(tanks[ti]));
             }
             sb.Append("],\n");
+            sb.Append("    \"breaches\": ").Append(breaches).Append(",\n");
+            sb.Append("    \"jetHp\": [");
+            for (int hi2 = 0; hi2 < jetHp.Count; hi2++)
+            {
+                if (hi2 > 0) sb.Append(", ");
+                sb.Append(Json.Num(jetHp[hi2]));
+            }
+            sb.Append("],\n");
+            sb.Append("    \"jetSync\": "); Json.Escape(sb, jetSync ?? "0"); sb.Append(",\n");
+            sb.Append("    \"sectSync\": "); Json.Escape(sb, sectSync ?? "0"); sb.Append(",\n");
             sb.Append("    \"upgrades\": [");
             for (int i = 0; i < upgrades.Count; i++)
             {
@@ -133,6 +151,11 @@ namespace MaydayCareer
                 fuelCapacity = Json.GetFloat(d, "fuelCapacity", 0f),
                 reserveSync = Json.GetFloat(d, "reserveSync", 0f),
                 tanks = Json.GetFloatList(d, "tanks"),
+                breaches = Json.GetInt(d, "breaches", 0),
+                jetHp = Json.GetFloatList(d, "jetHp"),
+                jetSync = Json.GetStr(d, "jetSync", "0"),
+                sectSync = Json.GetStr(d, "sectSync", "0"),
+                hasHullField = d.ContainsKey("breaches"),
                 hasFuelField = d.ContainsKey("fuelL"),
                 upgrades = Json.GetStrList(d, "upgrades"),
                 seatRowMask = Json.GetInt(d, "seatRowMask", 0),
@@ -277,6 +300,7 @@ namespace MaydayCareer
             // 世界物品快照：座排之外，"客舱里的器材"全部来自补给站购买，
             // 游戏自身完全不持久化，只能我们自己扫场景存下来。
             if (Plugin.SaveFuel.Value) ReadFuel(s);
+            if (Plugin.SaveHull.Value) ReadHull(s);
             int skipped = 0;
             if (Plugin.SaveItems.Value) s.items = RecordItems(out skipped);
             else Plugin.LogSource.LogInfo("[MaydayCareer] 物品快照未启用（SaveItems=false）");
@@ -459,6 +483,7 @@ namespace MaydayCareer
                 before, gs.Money, s.money, gs.Debt, gs.Leg, gs.CurrentAirport, added));
             RebuildSeats(s.seatRowMask, s.seatRows, s.hasSeatRowField);
             if (Plugin.LoadFuel.Value) RestoreFuel(s);
+            if (Plugin.LoadHull.Value) RestoreHull(s);
             RestoreItemsOnLoad(s.items);
             DumpCatalog(s);
         }
@@ -478,12 +503,134 @@ namespace MaydayCareer
             return !s.hasSeatRowField && !s.hasItemsField;
         }
 
+        // ---------- 机体损伤 ----------
+
+        static global::Mayday.Systems.HullSystem FindHull()
+        {
+            try { return UnityEngine.Object.FindObjectOfType<global::Mayday.Systems.HullSystem>(); }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 找不到 HullSystem: " + e.Message);
+                return null;
+            }
+        }
+
+        static void ReadHull(CareerState s)
+        {
+            try
+            {
+                var hs = FindHull();
+                if (hs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] 损伤快照跳过：HullSystem 未就绪"); return; }
+                s.breaches = hs.breaches;
+                s.jetSync = hs.jetSync.ToString();
+                s.sectSync = hs.sectSync.ToString();
+                s.jetHp.Clear();
+                var jh = hs.jetHp;
+                if (jh != null) for (int i = 0; i < jh.Length; i++) s.jetHp.Add(jh[i]);
+
+                // holes 的索引器读出来全是零（Count 却会变），像是 interop 对
+                // SyncList<struct> 的取值问题。改读它内部的 objects 列表试试
+                // （IList<T> 的桩上没有 Count，数量仍从 SyncList.Count 拿）。
+                try
+                {
+                    int n = hs.holes.Count;
+                    var inner = hs.holes.objects;
+                    if (inner != null)
+                    {
+                        var sbh = new StringBuilder();
+                        int nz = 0;
+                        for (int i = 0; i < n; i++)
+                        {
+                            var v = inner[i];
+                            bool zero = v.x == 0f && v.y == 0f && v.z == 0f && v.w == 0f;
+                            if (!zero)
+                            {
+                                nz++;
+                                if (sbh.Length > 0) sbh.Append(" | ");
+                                sbh.Append("#" + i + " " + v.x.ToString("F2") + "," + v.y.ToString("F2") + "," + v.z.ToString("F2") + ",r" + v.w.ToString("F3"));
+                            }
+                        }
+                        Plugin.LogSource.LogInfo("[MaydayCareer] holes.objects 共" + n + "项 非空=" + nz
+                            + (sbh.Length > 0 ? " → " + sbh : ""));
+                    }
+                    else Plugin.LogSource.LogWarning("[MaydayCareer] holes.objects 为空");
+                }
+                catch (Exception he) { Plugin.LogSource.LogWarning("[MaydayCareer] 读 holes.objects 失败: " + he.Message); }
+                Plugin.LogSource.LogInfo(string.Format(
+                    "[MaydayCareer] 损伤快照 breaches=0x{0:X4} jetHp=[{1}]",
+                    s.breaches, string.Join(", ", s.jetHp.ConvertAll(v => v.ToString("F2")).ToArray())));
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 损伤快照失败: " + e.Message); }
+        }
+
+        static DateTime _hullCheckAt;
+        static int _expectBreaches = -1;
+
+        static void RestoreHull(CareerState s)
+        {
+            if (!s.hasHullField)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 损伤还原跳过：存档没有 breaches 字段（旧格式）");
+                return;
+            }
+            try
+            {
+                var hs = FindHull();
+                if (hs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] 损伤还原跳过：HullSystem 未就绪"); return; }
+
+                int before = hs.breaches;
+                hs.breaches = (ushort)s.breaches;          // SyncVar，客户端会跟着同步
+                try { hs.jetSync = ulong.Parse(s.jetSync); } catch { }
+                try { hs.sectSync = ulong.Parse(s.sectSync); } catch { }
+
+                int wrote = 0;
+                try
+                {
+                    var jh = hs.jetHp;
+                    if (jh != null && s.jetHp.Count > 0)
+                    {
+                        int n = Math.Min(jh.Length, s.jetHp.Count);
+                        for (int i = 0; i < n; i++) { jh[i] = s.jetHp[i]; wrote++; }
+                    }
+                }
+                catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 写 jetHp 失败: " + e.Message); }
+
+                Plugin.LogSource.LogInfo(string.Format(
+                    "[MaydayCareer] 损伤还原 breaches 0x{0:X4} -> 0x{1:X4}（存档 0x{2:X4}） jetHp写入={3}项",
+                    before, hs.breaches, s.breaches, wrote));
+
+                _expectBreaches = s.breaches;
+                _hullCheckAt = DateTime.UtcNow.AddSeconds(3);
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 损伤还原失败: " + e.Message); }
+        }
+
+        /// <summary>3 秒后回读 breaches —— 和燃油同一个道理：写进去不算，留得住才算。</summary>
+        public static void TickVerifyHull()
+        {
+            if (_hullCheckAt == default) return;
+            if (DateTime.UtcNow < _hullCheckAt) return;
+            _hullCheckAt = default;
+            try
+            {
+                var hs = FindHull();
+                if (hs == null) return;
+                bool ok = hs.breaches == _expectBreaches;
+                Plugin.LogSource.LogInfo(string.Format(
+                    "[MaydayCareer] 损伤校验（3 秒后）breaches=0x{0:X4} 期望 0x{1:X4} → {2}",
+                    hs.breaches, _expectBreaches, ok ? "一致" : "不一致（被清回去了）"));
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 损伤校验失败: " + e.Message); }
+        }
+
         // ---------- 机体损伤（调试探针） ----------
 
         /// <summary>
         /// 主动打洞。创伤来自随机事件、手工等不到，这个键把"不可复现"变成"按一下就有"。
         /// 走的是游戏自己的 HullPanels.ServerBlowAt —— 随机事件调的就是它。
         /// </summary>
+        static int _blowTurn;
+
         public static void DebugBreach()
         {
             try
@@ -497,12 +644,18 @@ namespace MaydayCareer
                 if (blow == null) { Plugin.LogSource.LogWarning("[MaydayCareer][hull] ServerBlowAt 为空，无法打洞"); return; }
 
                 UnityEngine.Vector3 origin = hs.transform.position + UnityEngine.Vector3.up * 1.2f;
+                // 每次按键换一个绕机身的角度，否则每次都打在同一块板上
+                // （之前连按三次都是「右后」，就是因为偏移量固定）。
+                _blowTurn++;
+                float baseAng = _blowTurn * 1.7f;
                 int ok = 0, fail = 0;
                 for (int i = 0; i < 3; i++)
                 {
                     try
                     {
-                        var pt = origin + new UnityEngine.Vector3(0.6f * i, 0f, 0.4f * i);
+                        float ang = baseAng + i * 2.1f;
+                        var pt = origin + new UnityEngine.Vector3(
+                            (float)Math.Cos(ang) * 3.5f, 0.4f * i, (float)Math.Sin(ang) * 3.5f);
                         int idx = blow.Invoke(pt, 0.25f);
                         if (idx >= 0) ok++; else fail++;
                         Plugin.LogSource.LogInfo("[MaydayCareer][hull] ServerBlowAt #" + i + " -> 面板=" + idx);
@@ -526,12 +679,83 @@ namespace MaydayCareer
                 var holes = hs.holes;
                 int n = holes == null ? 0 : holes.Count;
                 Plugin.LogSource.LogInfo("[MaydayCareer][hull] " + tag + " 洞数=" + n);
-                for (int i = 0; i < n; i++)
+                try
                 {
-                    var v = holes[i];
-                    Plugin.LogSource.LogInfo(string.Format(
-                        "[MaydayCareer][hull]   洞{0} x={1:F3} y={2:F3} z={3:F3} w={4:F3}", i, v.x, v.y, v.z, v.w));
+                    var placed = hs.holePlaced;
+                    var spots = hs.holeBuildSpot;
+                    var sb2 = new StringBuilder();
+                    int nz = 0;
+                    if (placed != null)
+                    {
+                        for (int i = 0; i < placed.Length; i++)
+                        {
+                            var v = placed[i];
+                            bool zero = v.x == 0f && v.y == 0f && v.z == 0f && v.w == 0f;
+                            if (!zero) nz++;
+                            if (i < 10)
+                            {
+                                if (i > 0) sb2.Append(" | ");
+                                sb2.Append(zero ? "-" : (v.x.ToString("F2") + "," + v.y.ToString("F2") + "," + v.z.ToString("F2") + ",r" + v.w.ToString("F2")));
+                            }
+                        }
+                        Plugin.LogSource.LogInfo("[MaydayCareer][hull] " + tag + " holePlaced 长度=" + placed.Length
+                            + " 非空=" + nz + " 候选洞位=" + (spots == null ? -1 : spots.Length));
+                        Plugin.LogSource.LogInfo("[MaydayCareer][hull] " + tag + " 槽位: " + sb2);
+                    }
                 }
+                catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer][hull] holePlaced dump 失败: " + e.Message); }
+
+                try
+                {
+                    // holePlaced 实测全零（打洞后仍然非空=0），说明它不是活的存储。
+                    // 改问游戏自己的查询接口：HoleOpen(slot) / HoleAt(slot)。
+                    var sb3 = new StringBuilder();
+                    int openCount = 0;
+                    for (int i = 0; i < 16; i++)
+                    {
+                        bool open = false;
+                        UnityEngine.Vector4 v = default;
+                        try { open = hs.HoleOpen(i); } catch { break; }
+                        if (open)
+                        {
+                            openCount++;
+                            try { v = hs.HoleAt(i); } catch { }
+                            if (sb3.Length > 0) sb3.Append(" | ");
+                            sb3.Append("#" + i + " " + v.x.ToString("F2") + "," + v.y.ToString("F2") + "," + v.z.ToString("F2") + ",w" + v.w.ToString("F3"));
+                        }
+                    }
+                    Plugin.LogSource.LogInfo("[MaydayCareer][hull] " + tag + " HoleOpen 计数=" + openCount);
+                    if (sb3.Length > 0) Plugin.LogSource.LogInfo("[MaydayCareer][hull] " + tag + " 开口槽位: " + sb3);
+                }
+                catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer][hull] HoleOpen dump 失败: " + e.Message); }
+
+                try
+                {
+                    // holeViews[i].key 才是洞的真实数据，root.activeSelf 表示该槽位是否在用。
+                    // holes / holePlaced / HoleOpen 实测都读不出东西（全零），只有这里对得上。
+                    var views = hs.holeViews;
+                    var sb4 = new StringBuilder();
+                    int live = 0;
+                    if (views != null)
+                    {
+                        for (int i = 0; i < views.Length; i++)
+                        {
+                            var v = views[i];
+                            if (v == null) continue;
+                            bool on = false;
+                            try { on = v.root != null && v.root.activeSelf; } catch { }
+                            if (!on) continue;
+                            live++;
+                            var k = v.key;
+                            if (sb4.Length > 0) sb4.Append(" | ");
+                            sb4.Append("#" + i + " " + k.x.ToString("F2") + "," + k.y.ToString("F2") + "," + k.z.ToString("F2") + ",r" + k.w.ToString("F3"));
+                        }
+                        Plugin.LogSource.LogInfo("[MaydayCareer][hull] " + tag + " holeViews 长度=" + views.Length + " 活跃=" + live);
+                        if (sb4.Length > 0) Plugin.LogSource.LogInfo("[MaydayCareer][hull] " + tag + " 洞键: " + sb4);
+                    }
+                }
+                catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer][hull] holeViews dump 失败: " + e.Message); }
+
                 var jh = hs.jetHp;
                 if (jh != null && jh.Length > 0)
                 {
