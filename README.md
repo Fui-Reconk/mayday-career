@@ -21,6 +21,7 @@
 | 累计收入 / 累计乘客 | 生涯统计 |
 | 升级台账 | `Upgrades`（`SyncList<string>`），按 id 逐条写回 |
 | **座排** | `rowMask` 位图，按存档原样还原 |
+| **燃油** | 左右油箱与储备油的**绝对升数**（`FuelSystem.fuelL/fuelR/reserveTank`） |
 | **客舱物品** | 灭火器、锤子、胶带、油桶、座位套件等实体物品的完整快照（实测 37 件级别） |
 
 **座排为什么要单独存**：升级是"台账"，而座排是买 `seat_kit` 之后**物理装出来**的实体。只把升级列表写回去，座位不会自己长出来。
@@ -99,6 +100,8 @@ BepInEx\config\local.mayday.career.cfg
 | `SaveKey` | `J` | 存盘热键 |
 | `SaveItems` | `true` | 存盘时一并快照客舱物品 |
 | `LoadItems` | `true` | 读档时把物品补回场景（幂等） |
+| `SaveFuel` | `true` | 存盘时记录左右油箱与储备油量 |
+| `LoadFuel` | `true` | 读档时把油量写回 `FuelSystem`，写入后 3 秒自动回读校验 |
 | `ClearBeforeLoad` | `false` | 读档后钱变成两倍时改成 `true` |
 | `Verbose` | `true` | 打印导演机的每次阶段切换，排查用 |
 

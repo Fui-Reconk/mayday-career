@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "0.9.2";
+        public const string Version = "0.10.0";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
@@ -34,6 +34,8 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> DumpOnLoad;
         internal static ConfigEntry<bool> SaveItems;
         internal static ConfigEntry<bool> LoadItems;
+        internal static ConfigEntry<bool> SaveFuel;
+        internal static ConfigEntry<bool> LoadFuel;
         internal static ConfigEntry<string> SaveKey;
 
         public override void Load()
@@ -110,6 +112,18 @@ namespace MaydayCareer
                 true,
                 "读档时把存档里的器材补回场景（幂等：已有同 id 物品就不再生成）。\n" +
                 "站点重建（GroundCrew.ServerReanchor）之后会自动再补一次，最多重试 3 次。");
+
+            SaveFuel = Config.Bind(
+                "General",
+                "SaveFuel",
+                true,
+                "存盘时记录左右油箱与储备油量（绝对升数）。");
+
+            LoadFuel = Config.Bind(
+                "General",
+                "LoadFuel",
+                true,
+                "读档时把油量写回 FuelSystem。写入后 3 秒会自动回读校验并打日志。");
 
             LogSource.LogInfo("[MaydayCareer] 已加载 v" + Version);
 

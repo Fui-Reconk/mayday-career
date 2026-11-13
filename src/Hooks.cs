@@ -199,6 +199,7 @@ namespace MaydayCareer
         private static void Postfix()
         {
             Hotkey.Poll();
+            CareerStore.TickVerify();
         }
     }
 }

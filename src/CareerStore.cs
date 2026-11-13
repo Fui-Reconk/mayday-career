@@ -22,6 +22,15 @@ namespace MaydayCareer
         public int totalPassengers;
         public float rating;
         public float difficulty;
+
+        // 燃油：fuelL/fuelR 是 SyncVar（NetworkfuelL/NetworkfuelR），
+        // 记绝对升数而不是比例 —— 油箱容量会随 upgrades 变化。
+        public float fuelL;
+        public float fuelR;
+        public float reserveTank;
+        public float fuelCapacity;
+        public bool hasFuelField;
+
         public List<string> upgrades = new List<string>();
 
         // 座排：rowMask 是权威位图（PassengerDirector.rowMask 的 SyncVar），
@@ -57,6 +66,10 @@ namespace MaydayCareer
             sb.Append("    \"totalPassengers\": ").Append(totalPassengers).Append(",\n");
             sb.Append("    \"rating\": ").Append(Json.Num(rating)).Append(",\n");
             sb.Append("    \"difficulty\": ").Append(Json.Num(difficulty)).Append(",\n");
+            sb.Append("    \"fuelL\": ").Append(Json.Num(fuelL)).Append(",\n");
+            sb.Append("    \"fuelR\": ").Append(Json.Num(fuelR)).Append(",\n");
+            sb.Append("    \"reserveTank\": ").Append(Json.Num(reserveTank)).Append(",\n");
+            sb.Append("    \"fuelCapacity\": ").Append(Json.Num(fuelCapacity)).Append(",\n");
             sb.Append("    \"upgrades\": [");
             for (int i = 0; i < upgrades.Count; i++)
             {
@@ -104,6 +117,11 @@ namespace MaydayCareer
                 totalPassengers = Json.GetInt(d, "totalPassengers", 0),
                 rating = Json.GetFloat(d, "rating", 0f),
                 difficulty = Json.GetFloat(d, "difficulty", 1f),
+                fuelL = Json.GetFloat(d, "fuelL", 0f),
+                fuelR = Json.GetFloat(d, "fuelR", 0f),
+                reserveTank = Json.GetFloat(d, "reserveTank", 0f),
+                fuelCapacity = Json.GetFloat(d, "fuelCapacity", 0f),
+                hasFuelField = d.ContainsKey("fuelL"),
                 upgrades = Json.GetStrList(d, "upgrades"),
                 seatRowMask = Json.GetInt(d, "seatRowMask", 0),
                 seatRowCount = Json.GetInt(d, "seatRowCount", 0),
@@ -246,6 +264,7 @@ namespace MaydayCareer
 
             // 世界物品快照：座排之外，"客舱里的器材"全部来自补给站购买，
             // 游戏自身完全不持久化，只能我们自己扫场景存下来。
+            if (Plugin.SaveFuel.Value) ReadFuel(s);
             int skipped = 0;
             if (Plugin.SaveItems.Value) s.items = RecordItems(out skipped);
             else Plugin.LogSource.LogInfo("[MaydayCareer] 物品快照未启用（SaveItems=false）");
@@ -427,6 +446,7 @@ namespace MaydayCareer
                 "[MaydayCareer] 已读档 钱 {0} -> {1}（存档 {2}） 债 {3} 第{4}段 机场{5} 升级 +{6}",
                 before, gs.Money, s.money, gs.Debt, gs.Leg, gs.CurrentAirport, added));
             RebuildSeats(s.seatRowMask, s.seatRows, s.hasSeatRowField);
+            if (Plugin.LoadFuel.Value) RestoreFuel(s);
             RestoreItemsOnLoad(s.items);
             DumpCatalog(s);
         }
@@ -444,6 +464,100 @@ namespace MaydayCareer
             if (s == null) return false;
             if (s.version < 2) return true;
             return !s.hasSeatRowField && !s.hasItemsField;
+        }
+
+        // ---------- 燃油 ----------
+
+        // 真值在 FuelSystem 上：fuelL / fuelR 是 SyncVar（NetworkfuelL / NetworkfuelR），
+        // reserveTank 是本地模拟值。PlaneTelemetry.FuelLiters 只是每帧刷新的快照，
+        // 写它没有意义 —— 下一帧就被模拟覆盖。
+        static global::Mayday.Systems.FuelSystem FindFuelSystem()
+        {
+            try { return UnityEngine.Object.FindObjectOfType<global::Mayday.Systems.FuelSystem>(); }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 找不到 FuelSystem: " + e.Message);
+                return null;
+            }
+        }
+
+        static void ReadFuel(CareerState s)
+        {
+            try
+            {
+                var fs = FindFuelSystem();
+                if (fs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] 燃油快照跳过：FuelSystem 未就绪"); return; }
+                s.fuelL = fs.fuelL;
+                s.fuelR = fs.fuelR;
+                s.reserveTank = fs.reserveTank;
+                s.fuelCapacity = fs.capacity;
+                Plugin.LogSource.LogInfo(string.Format(
+                    "[MaydayCareer] 燃油快照 L={0:F1} R={1:F1} 储备={2:F1} 容量={3:F1}",
+                    s.fuelL, s.fuelR, s.reserveTank, s.fuelCapacity));
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 燃油快照失败: " + e.Message); }
+        }
+
+        static DateTime _fuelCheckAt;
+        static float _expectL, _expectR;
+
+        static float ClampFuel(float v, float cap)
+        {
+            if (v < 0f) return 0f;
+            if (cap > 0f && v > cap) return cap;
+            return v;
+        }
+
+        static void RestoreFuel(CareerState s)
+        {
+            if (!s.hasFuelField)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 燃油还原跳过：存档没有燃油字段（旧格式），按 J 存一次盘即可记录");
+                return;
+            }
+            try
+            {
+                var fs = FindFuelSystem();
+                if (fs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] 燃油还原跳过：FuelSystem 未就绪"); return; }
+
+                float cap = fs.capacity;
+                float l = ClampFuel(s.fuelL, cap);
+                float r = ClampFuel(s.fuelR, cap);
+
+                fs.fuelL = l;
+                fs.fuelR = r;
+                try { fs.reserveTank = ClampFuel(s.reserveTank, Math.Max(cap, s.reserveTank)); } catch { }
+                try { fs.reserveSync = fs.reserveTank; } catch { }
+
+                Plugin.LogSource.LogInfo(string.Format(
+                    "[MaydayCareer] 燃油还原 L={0:F1} R={1:F1} 储备={2:F1}（存档 L={3:F1} R={4:F1}，容量 {5:F1}）",
+                    fs.fuelL, fs.fuelR, fs.reserveTank, s.fuelL, s.fuelR, cap));
+
+                _expectL = l; _expectR = r;
+                _fuelCheckAt = DateTime.UtcNow.AddSeconds(3);
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 燃油还原失败: " + e.Message); }
+        }
+
+        /// <summary>
+        /// 写入后 3 秒回读一次。燃油是模拟量，如果写错了源对象，
+        /// 下一帧就会被模拟覆盖 —— 只有延迟回读才能证明真的写进去了。
+        /// </summary>
+        public static void TickVerify()
+        {
+            if (_fuelCheckAt == default) return;
+            if (DateTime.UtcNow < _fuelCheckAt) return;
+            _fuelCheckAt = default;
+            try
+            {
+                var fs = FindFuelSystem();
+                if (fs == null) return;
+                bool ok = Math.Abs(fs.fuelL - _expectL) < 1f && Math.Abs(fs.fuelR - _expectR) < 1f;
+                Plugin.LogSource.LogInfo(string.Format(
+                    "[MaydayCareer] 燃油校验（3 秒后）L={0:F1} R={1:F1} 期望 L={2:F1} R={3:F1} → {4}",
+                    fs.fuelL, fs.fuelR, _expectL, _expectR, ok ? "一致" : "不一致（模拟把值改回去了）"));
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 燃油校验失败: " + e.Message); }
         }
 
         /// <summary>
