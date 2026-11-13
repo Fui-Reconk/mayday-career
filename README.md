@@ -97,7 +97,7 @@ BepInEx\config\local.mayday.career.cfg
 | `AutoLoadOnStart` | `false` | 进入新一轮时自动读档。默认关闭，改为手动按热键 |
 | `LoadKey` | `F9` | 读档热键 |
 | `SaveKey` | `J` | 存盘热键 |
-| `SeatRows` | `5` | 读档后把座排补到这个数量，`0` = 不干预。详见下方说明 |
+| `SeatRows` | `3` | 读档后把座排补到这个数量，`0` = 不干预。默认 3 等于游戏原始开局排数，即不做额外补足 |
 | `SaveItems` | `true` | 存盘时一并快照客舱物品 |
 | `LoadItems` | `true` | 读档时把物品补回场景（幂等） |
 | `ClearBeforeLoad` | `false` | 读档后钱变成两倍时改成 `true` |

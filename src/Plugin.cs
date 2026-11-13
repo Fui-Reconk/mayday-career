@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "0.9.0";
+        public const string Version = "0.9.1";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
@@ -92,8 +92,9 @@ namespace MaydayCareer
             SeatRows = Config.Bind(
                 "General",
                 "SeatRows",
-                5,
+                3,
                 "读档后把客舱座排补到这个数量。0 = 不干预，保持游戏原样。\n" +
+                "默认 3 = 游戏原始开局排数（PlaneLayout.InitialSeatRows），即不做额外补足。\n" +
                 "受 rowMask 位图限制，最多 8 排；超出会被夹到 8。\n" +
                 "补装只调 PassengerDirector.ServerInstallRow，不消耗 seat_kit —— 属于作弊性质的补足。");
 
