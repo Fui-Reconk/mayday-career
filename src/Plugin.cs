@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "0.10.0";
+        public const string Version = "0.10.1";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;

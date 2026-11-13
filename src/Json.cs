@@ -178,6 +178,15 @@ namespace MaydayCareer
             return outList;
         }
 
+        public static List<float> GetFloatList(Dictionary<string, object> d, string k)
+        {
+            var outList = new List<float>();
+            if (d != null && d.TryGetValue(k, out var v) && v is List<object> arr)
+                foreach (var o in arr)
+                    if (o is double dv) outList.Add((float)dv);
+            return outList;
+        }
+
         /// <summary>对象数组，用于 items 这种记录列表。</summary>
         public static List<Dictionary<string, object>> GetObjList(Dictionary<string, object> d, string k)
         {

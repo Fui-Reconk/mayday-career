@@ -28,7 +28,9 @@ namespace MaydayCareer
         public float fuelL;
         public float fuelR;
         public float reserveTank;
+        public float reserveSync;
         public float fuelCapacity;
+        public List<float> tanks = new List<float>();
         public bool hasFuelField;
 
         public List<string> upgrades = new List<string>();
@@ -70,6 +72,14 @@ namespace MaydayCareer
             sb.Append("    \"fuelR\": ").Append(Json.Num(fuelR)).Append(",\n");
             sb.Append("    \"reserveTank\": ").Append(Json.Num(reserveTank)).Append(",\n");
             sb.Append("    \"fuelCapacity\": ").Append(Json.Num(fuelCapacity)).Append(",\n");
+            sb.Append("    \"reserveSync\": ").Append(Json.Num(reserveSync)).Append(",\n");
+            sb.Append("    \"tanks\": [");
+            for (int ti = 0; ti < tanks.Count; ti++)
+            {
+                if (ti > 0) sb.Append(", ");
+                sb.Append(Json.Num(tanks[ti]));
+            }
+            sb.Append("],\n");
             sb.Append("    \"upgrades\": [");
             for (int i = 0; i < upgrades.Count; i++)
             {
@@ -121,6 +131,8 @@ namespace MaydayCareer
                 fuelR = Json.GetFloat(d, "fuelR", 0f),
                 reserveTank = Json.GetFloat(d, "reserveTank", 0f),
                 fuelCapacity = Json.GetFloat(d, "fuelCapacity", 0f),
+                reserveSync = Json.GetFloat(d, "reserveSync", 0f),
+                tanks = Json.GetFloatList(d, "tanks"),
                 hasFuelField = d.ContainsKey("fuelL"),
                 upgrades = Json.GetStrList(d, "upgrades"),
                 seatRowMask = Json.GetInt(d, "seatRowMask", 0),
@@ -491,9 +503,19 @@ namespace MaydayCareer
                 s.fuelR = fs.fuelR;
                 s.reserveTank = fs.reserveTank;
                 s.fuelCapacity = fs.capacity;
+                try { s.reserveSync = fs.reserveSync; } catch { }
+                s.tanks.Clear();
+                try
+                {
+                    var arr = fs.tank;
+                    if (arr != null)
+                        for (int i = 0; i < arr.Length; i++) s.tanks.Add(arr[i]);
+                }
+                catch (Exception te) { Plugin.LogSource.LogWarning("[MaydayCareer] 读取 tank 数组失败: " + te.Message); }
                 Plugin.LogSource.LogInfo(string.Format(
-                    "[MaydayCareer] 燃油快照 L={0:F1} R={1:F1} 储备={2:F1} 容量={3:F1}",
-                    s.fuelL, s.fuelR, s.reserveTank, s.fuelCapacity));
+                    "[MaydayCareer] 燃油快照 L={0:F1} R={1:F1} 储备={2:F1} 容量={3:F1} tank=[{4}]",
+                    s.fuelL, s.fuelR, s.reserveTank, s.fuelCapacity,
+                    string.Join(", ", s.tanks.ConvertAll(v => v.ToString("F1")).ToArray())));
             }
             catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 燃油快照失败: " + e.Message); }
         }
@@ -524,14 +546,34 @@ namespace MaydayCareer
                 float l = ClampFuel(s.fuelL, cap);
                 float r = ClampFuel(s.fuelR, cap);
 
+                // tank[] 才是模拟的真实存储 —— 只写 fuelL/fuelR 会被
+                // 下一帧从 tank 重算覆盖（实测 3 秒内就退回满油）。
+                int wrote = 0;
+                try
+                {
+                    var arr = fs.tank;
+                    if (arr != null && s.tanks.Count > 0)
+                    {
+                        int n = Math.Min(arr.Length, s.tanks.Count);
+                        for (int i = 0; i < n; i++)
+                        {
+                            float v = ClampFuel(s.tanks[i], cap);
+                            arr[i] = v;
+                            wrote++;
+                        }
+                    }
+                }
+                catch (Exception te) { Plugin.LogSource.LogWarning("[MaydayCareer] 写入 tank 数组失败: " + te.Message); }
+
                 fs.fuelL = l;
                 fs.fuelR = r;
+                try { fs.reserveSync = s.reserveSync; } catch { }
                 try { fs.reserveTank = ClampFuel(s.reserveTank, Math.Max(cap, s.reserveTank)); } catch { }
                 try { fs.reserveSync = fs.reserveTank; } catch { }
 
                 Plugin.LogSource.LogInfo(string.Format(
-                    "[MaydayCareer] 燃油还原 L={0:F1} R={1:F1} 储备={2:F1}（存档 L={3:F1} R={4:F1}，容量 {5:F1}）",
-                    fs.fuelL, fs.fuelR, fs.reserveTank, s.fuelL, s.fuelR, cap));
+                    "[MaydayCareer] 燃油还原 L={0:F1} R={1:F1} 储备={2:F1} tank写入={3}项（存档 L={4:F1} R={5:F1}，容量 {6:F1}）",
+                    fs.fuelL, fs.fuelR, fs.reserveTank, wrote, s.fuelL, s.fuelR, cap));
 
                 _expectL = l; _expectR = r;
                 _fuelCheckAt = DateTime.UtcNow.AddSeconds(3);
