@@ -180,8 +180,28 @@ namespace MaydayCareer
         [HarmonyPatch(typeof(global::Mayday.Airport.GroundCrew), "ServerReanchor")]
         private static void Postfix()
         {
-            try { CareerStore.OnSiteReanchored(); }
+            try { CareerStore.OnSiteReanchored(); } catch { }
+            // 站点重锚会重建客舱，座排可能被打回初始值 —— 借这个时机复查一次
+            try { CareerStore.EnsureSavedSeats("站点重锚"); }
             catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 站点重建后补物品异常: " + e); }
+        }
+    }
+
+    /// <summary>
+    /// 新一轮重置（游戏自己会把客舱打回初始排数）之后立刻补回座排。
+    ///
+    /// 之前只有 3 秒后的复查，效果是「先回退、再恢复」的闪烁。
+    /// 挂到重置方法本身，就能在同一次调用里补上，看不到中间态。
+    /// </summary>
+    [HarmonyPatch]
+    internal static class NewRunResetHook
+    {
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(global::Mayday.Passengers.PassengerDirector), "ServerResetForNewRun")]
+        private static void Postfix()
+        {
+            try { CareerStore.EnsureSavedSeats("新一轮重置"); }
+            catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 新一轮重置后补座排异常: " + e); }
         }
     }
 
@@ -200,7 +220,6 @@ namespace MaydayCareer
         {
             Hotkey.Poll();
             CareerStore.TickVerify();
-            CareerStore.TickVerifyHull();
             CareerStore.TickVerifyEngines();
         }
     }

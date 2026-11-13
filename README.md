@@ -1,6 +1,6 @@
 # Mayday Career
 
-给《Mayday Airways》Demo 补一层**跨局进度存档**：每趟航班结束后把公司状态写进文件，下次启动接着上次的钱、座排和客舱器材继续飞。
+给《Mayday Airways》Demo 补一层**跨局进度存档**：每趟航班结束后把公司状态写进文件，下次启动接着上次的钱、座排、燃油、发动机和客舱器材继续飞。
 
 游戏本身没有这个功能。它只持久化设置和装扮（`settings.json` / `ui_hints.json`），而金钱、欠款、已购升级都挂在 `GameState` 这个 `NetworkBehaviour` 上——随房间建立、随房间销毁，退出即清零。客舱里花钱买的器材更彻底：连会话级状态都算不上，是纯场景对象，换个机场就没了。
 
@@ -11,26 +11,32 @@
 
 ---
 
-## 功能
+## v1.0.0 保存了什么
 
-| 存什么 | 说明 |
+| 项 | 数据来源 | 状态 |
+|---|---|---|
+| 金钱 / 欠款 | `GameState.Money` / `Debt` | ✅ |
+| 第几段 / 当前机场 / 目的地 | `GameState.Leg` / `CurrentAirport` / `DestinationAirport` | ✅ |
+| 评级 / 难度 | `GameState.Rating` / `Difficulty` | ✅ |
+| 累计收入 / 累计乘客 | `GameState.TotalEarned` / `TotalPassengers` | ✅ |
+| 已购升级 | `GameState.Upgrades`（`SyncList<string>`） | ✅ |
+| 座位排数 | `PassengerDirector.rowMask` 位图 | ✅ |
+| 燃油 | `FuelSystem.tank[]` 左右箱 + 储备油（**绝对升数**） | ✅ |
+| 发动机 | 每台的 `state` / `faults` / `rpm` / `cowl` / 机油量 | ✅ |
+| 客舱器材 | 灭火器、锤子、胶带、油桶、座位套件等实体的完整快照 | ✅ |
+
+### 不保存什么，以及为什么
+
+| 项 | 原因 |
 |---|---|
-| 钱 / 欠款 | 走 `ServerAddMoney` / `ServerAddDebt`，账本和 HUD 一起刷新 |
-| 第几段 / 当前机场 / 目的地 | 航段与位置 |
-| 评级 / 难度 | `Rating` / `Difficulty` |
-| 累计收入 / 累计乘客 | 生涯统计 |
-| 升级台账 | `Upgrades`（`SyncList<string>`），按 id 逐条写回 |
-| **座排** | `rowMask` 位图，按存档原样还原 |
-| **燃油** | 左右油箱与储备油的**绝对升数**（`FuelSystem.tank[]`） |
-| **发动机** | 每台的状态/故障位/转速/油量/温度/起火/电池（`EngineUnit`） |
-| **机身损伤** | 分段受损标记（`jetHp`）。洞的位置与视觉不存，见下方说明 |
-| **客舱物品** | 灭火器、锤子、胶带、油桶、座位套件等实体物品的完整快照（实测 37 件级别） |
+| **机身破洞** | 游戏不把洞的坐标暴露给托管层——`holes`、`holePlaced`、`HoleOpen()`、`holeViews`、`breaches`、`jetHp`、`jetSync` 七个入口实测在洞明明存在时全部返回零或未激活。况且洞在飞行途中玩家就会补掉，留着反而怪 |
+| **分段受损（`jetHp`）** | 它是洞的派生值：直接写当场可读、3 秒后被重算归零；改写成 `jetSync` / `sectSync` 位图再试，`jetHp` 依然是零。没有洞可依附，"哪一段受损"就是个空状态 |
+| **机翼掉漆（`paintCover`）** | 数值能存能读（0.55 / 0.60 三秒后原样还在），但改了数组材质不重绘，`TickPaint` / `TickPaintCover` 都推不动视觉。而且机翼掉漆在飞行中就会被补漆 |
+| **行李** | 每趟航班按合同生成，结算时游戏自己会清 |
+| **手持物品、乘客携带物、炸弹** | 运行时临时对象（`Misc` 分类），存了没意义 |
+| **燃烧 / 冒烟等特效** | 瞬时视觉，只还原"故障"这个事实 |
 
-**座排为什么要单独存**：升级是"台账"，而座排是买 `seat_kit` 之后**物理装出来**的实体。只把升级列表写回去，座位不会自己长出来。
-
-**客舱物品为什么要单独存**：`UpgradeInfo.deliverItem` 在全部 7 个升级上都是空的——不存在"买升级送实物"这回事。器材全部来自补给站直接购买，游戏对它们零持久化。
-
-**尚未支持**：油量、机体损伤、涂装。它们要么是每帧被模拟覆盖的快照，要么还没有找到可靠的写入点，原因见 [docs/FINDINGS.md](docs/FINDINGS.md)。
+详细逆向过程见 [docs/FINDINGS.md](docs/FINDINGS.md)。
 
 ---
 
@@ -79,11 +85,7 @@ Steam 用户可以右键游戏 → 管理 → 浏览本地文件，直接打开�
 %USERPROFILE%\AppData\LocalLow\Lyngo Games\Mayday Airways\career.bak.json    上一份
 ```
 
-和游戏的 `settings.json` 放一起。
-
-**每次写新档之前会把上一份复制成 `career.bak.json`。** 所以手滑读档覆盖了进度，把 `career.bak.json` 改名成 `career.json` 就能捞回上一次。直接删掉 `career.json` 就是全新公司。
-
-存档格式带版本号（当前 `version: 2`）。读到旧版存档会打 Warning 提示，并说明只能还原钱/进度/升级——进机舱按一次 `J` 即可升级到 v2。
+和游戏的 `settings.json` 放一起。每次写新档之前会把上一份复制成 `career.bak.json` —— 手滑读档覆盖了进度，把 `career.bak.json` 改名成 `career.json` 就能捞回上一次。直接删掉 `career.json` 就是全新公司。
 
 ## 配置
 
@@ -100,10 +102,10 @@ BepInEx\config\local.mayday.career.cfg
 | `AutoLoadOnStart` | `false` | 进入新一轮时自动读档。默认关闭，改为手动按热键 |
 | `LoadKey` | `F9` | 读档热键 |
 | `SaveKey` | `J` | 存盘热键 |
-| `SaveItems` | `true` | 存盘时一并快照客舱物品 |
-| `LoadItems` | `true` | 读档时把物品补回场景（幂等） |
-| `SaveFuel` | `true` | 存盘时记录左右油箱与储备油量 |
-| `LoadFuel` | `true` | 读档时把油量写回 `FuelSystem`，写入后 3 秒自动回读校验 |
+| `GuardSave` | `true` | 存盘回退保护：当前局比存档更早（如刚启动的第 0 段新公司）时跳过存盘 |
+| `SaveItems` / `LoadItems` | `true` | 客舱物品的存 / 读 |
+| `SaveFuel` / `LoadFuel` | `true` | 燃油的存 / 读（写入后 3 秒自动回读校验） |
+| `SaveEngine` / `LoadEngine` | `true` | 发动机的存 / 读（写入后 3 秒自动回读校验） |
 | `ClearBeforeLoad` | `false` | 读档后钱变成两倍时改成 `true` |
 | `Verbose` | `true` | 打印导演机的每次阶段切换，排查用 |
 
@@ -111,7 +113,7 @@ BepInEx\config\local.mayday.career.cfg
 
 | 项 | 默认 | 说明 |
 |---|---|---|
-| `DumpOnLoad` | `true` | 读档后把升级目录 / 物品目录 / 座位状态 / 补给站状态打进日志。排查用，稳定后关掉 |
+| `DumpOnLoad` | `true` | 读档后把升级目录 / 物品目录 / 座位状态打进日志。稳定后关掉 |
 
 ## 存档语义
 
@@ -122,25 +124,31 @@ BepInEx\config\local.mayday.career.cfg
 
 之所以坠机不存：游戏的设计是失败即整轮作废（`GameOver` 之后立刻回 `PreShift` 重开）。在这里存盘等于把 roguelike 改成检查点，而且会当场把罚完的余额固化进下一轮。
 
-**读档是幂等的**：物品按 id 计数、只补差额；座排跳过已装的排。连按 `F9` 不会让物品翻倍（实测连按 7 次，每次都是 `37 / 37`）。
+**读档是幂等的**：物品按 id 计数、只补差额；座排跳过已装的排。连按读档键不会让物品翻倍（实测连按 7 次，每次都是 `37 / 37`）。
+
+## 三个实现上的坑（值得知道）
+
+1. **派生值不能写。** `FuelSystem.fuelL/fuelR` 有 `NetworkfuelL` 之类的同步镜像，看着像权威数据，其实是模拟每帧从 `tank[]` 重算的；`EngineUnit.oil` 同理，真源是 `lOil`。只写派生值时"当场回读一切正常、3 秒后被打回原值"。所以插件写完 3 秒后会再回读一次并打日志。
+
+2. **座排会被游戏重置。** 读档装好 8 排之后，游戏可能又跑一次新一轮重置打回 3 排。所以除了 3 秒后复查，还挂在 `PassengerDirector.ServerResetForNewRun` 和 `GroundCrew.ServerReanchor` 上，缺了就补回来。
+
+3. **不能用 `NetworkManager.singleton`。** `ApplyDefaults` 执行时它还是 null；插件读档全程用组件单例和 `GameState.Instance`，不依赖 `singleton`。
 
 ## 已知限制
 
-- **物品只存"客舱/货舱里的实体"**。行李（`Luggage` 分类，游戏结算会自己清）和手持物品不存；`Misc` 分类的运行时临时物（乘客携带、炸弹等）也不存
+- **物品只存"客舱/货舱里的实体"**。行李和手持物品不存；`Misc` 分类的运行时临时物也不存
 - 物品的 `tag` **只记录、不还原**——它是运行时网络句柄，重新生成必然拿到新值
-- 物品按 `transform` 层级路径找回原插槽。站点会被重新锚定到下一个机场，所以世界坐标不可靠；万一某个插槽对不上，物品会落到存档记录的世界坐标处，日志里 `socket 未命中` 会计数
+- 物品按 `transform` 层级路径找回原插槽。站点会被重新锚定到下一个机场，世界坐标不可靠；万一某个插槽对不上，物品会落到存档记录的世界坐标处，日志里 `socket 未命中` 会计数
+- **发动机只保证 `state` / `faults` 准确**。机油量（`lOil`）已验证能留住，温度等纯模拟量会在几秒内回归正常值
 - **多人时只有房主存读**。纯客户端按热键只打日志、不写盘，避免用不完整的状态覆盖房主存档
-- **机身破洞不存，这是有意的**：洞在飞行中本来就会被玩家修好，留下来反而不符合游戏节奏。存档只记「哪一段受损」（`jetHp`），不记具体洞位——何况洞的坐标游戏也没暴露给托管层（七个入口实测全为零，详见 `docs/FINDINGS.md`）
-- 发动机只存「状态 + 故障位 + 转速 + 油温油量」这类可观测量；正在燃烧、冒烟等瞬时特效不会还原
-- 涂装未做
-- 游戏更新后如果方法名变化，Harmony 补丁会失败。排查入口：`BepInEx\LogOutput.log` 搜 `MaydayCareer`
+- 按键冲突：默认 `F9` / `J`，如果和游戏内操作撞车，改配置即可，不用重新编译
 
 ## 验证装好了
 
 游戏启动后窗口标题会带 `BepInEx` 字样。日志在 `BepInEx\LogOutput.log`，正常应该能看到：
 
 ```
-[MaydayCareer] 已加载 v0.9.0
+[MaydayCareer] 已加载 v1.0.0
 [MaydayCareer] 存档路径 = ...\career.json
 [MaydayCareer] 补丁数 = 7
 ```
@@ -149,22 +157,25 @@ BepInEx\config\local.mayday.career.cfg
 
 ```
 [MaydayCareer] 检测到 J，手动存盘
+[MaydayCareer] 燃油快照 L=152.2 R=152.2 储备=0.0 容量=160.0 tank=[152.2, 152.2]
+[MaydayCareer] 发动机快照2台: #0 state=1 faults=0x00 rpm=2100 oil=1.000 lOil=1.000 temp=78.5
 [MaydayCareer] 已备份上一份存档 -> career.bak.json
-[MaydayCareer] 物品快照 已记录 37 件（跳过 1 件）
-[MaydayCareer] 已保存 钱=1311 债=1200 第3段 升级=1 座排=5 物品=37 -> ...\career.json
+[MaydayCareer] 已保存 钱=1311 债=1200 第3段 升级=1 座排=8 物品=37 -> ...\career.json
 ```
 
-再按 `F9` 读档：
+再按 `F9` 读档（3 秒后自动校验）：
 
 ```
-[MaydayCareer] 检测到 F9，手动读档
 [MaydayCareer] 已读档 钱 600 -> 1311（存档 1311） 债 1200 第3段 机场3 升级 +1
-[MaydayCareer] 座位重建 补装0排 已装5排 premium=True（RowCount=5，视觉兜底0处）
-[MaydayCareer] 座位补装 目标=5 当前=5 → 无需补装
+[MaydayCareer] 座位重建 补装5排 已装8排 premium=True（RowCount=8，视觉兜底0处）
+[MaydayCareer] 燃油还原 L=152.2 R=152.2 储备=0.0 tank写入=2项
+[MaydayCareer] 发动机还原 2/2 台: #0 state=1 faults=0x00 #1 state=1 faults=0x00
 [MaydayCareer] 物品重建 成功 37 / 目标 37，socket 未命中 0（生成失败 0，第 1 次）
+[MaydayCareer] 燃油校验（3 秒后）L=152.2 R=152.2 期望 L=152.2 R=152.2 → 一致
+[MaydayCareer] 发动机校验（3 秒后）#0 state=1 faults=0x00 oil=1.000
 ```
 
-只要**没有任何 `[Warning]`**、且 `物品重建` 的分子等于分母，就是健康状态。
+健康的判据：**没有任何 `[Warning]`**、`物品重建` 的分子等于分母、校验行写"一致"。
 
 ## 卸载
 
@@ -172,13 +183,15 @@ BepInEx\config\local.mayday.career.cfg
 
 ## 版本兼容性
 
-针对 **游戏 0.14.11 / Unity 6000.3.20f1 / IL2CPP metadata v39** 开发。
+v1.0.0 针对 **游戏 0.14.11 / Unity 6000.3.20f1 / IL2CPP metadata v39** 开发，运行时为 **BepInEx 6.0.0-be.793**。
 
-游戏更新后如果 `ServerReport`、`ServerResetRun`、`ServerReanchor` 等被改名，Harmony 会打补丁失败，日志里搜 `MaydayCareer` 就能看到。届时需要重新编译。
+游戏更新后如果 `ServerResetRun`、`SetStage`、`ServerReanchor`、`FuelSystem`、`EngineUnit` 等被改名或改结构，Harmony 会打补丁失败或字段读不到。排查入口：`BepInEx\LogOutput.log` 搜 `MaydayCareer`。
 
 ## 风险提示
 
 修改游戏运行行为可能违反服务条款。本插件会改变游戏的经济设计意图（原作是"一趟航班就是一段完整经历"），请自行判断是否使用，风险自负。
+
+游戏没有反作弊机制，也不会检测到本插件——写入走的是游戏自己的 `ServerAddMoney` / `ServerAddUpgrade` 等 API，产生的同步流量与正常玩法完全一致。但反过来也要清楚：**队友无法验证你的存档是不是"诚实"的**。这就是它只适合私人房间的原因。
 
 仓库内不包含任何游戏文件或由其生成的派生物，详见 `.gitignore`。
 

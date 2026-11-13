@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "0.13.0";
+        public const string Version = "1.0.0";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
@@ -36,10 +36,9 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> LoadItems;
         internal static ConfigEntry<bool> SaveFuel;
         internal static ConfigEntry<bool> LoadFuel;
-        internal static ConfigEntry<bool> SaveHull;
-        internal static ConfigEntry<bool> LoadHull;
         internal static ConfigEntry<bool> SaveEngine;
         internal static ConfigEntry<bool> LoadEngine;
+        internal static ConfigEntry<bool> GuardSave;
         internal static ConfigEntry<string> SaveKey;
 
         public override void Load()
@@ -129,18 +128,6 @@ namespace MaydayCareer
                 true,
                 "读档时把油量写回 FuelSystem。写入后 3 秒会自动回读校验并打日志。");
 
-            SaveHull = Config.Bind(
-                "General",
-                "SaveHull",
-                true,
-                "存盘时记录机身破洞状态（breaches 掩码 + 分段血量）。");
-
-            LoadHull = Config.Bind(
-                "General",
-                "LoadHull",
-                true,
-                "读档时写回机身破洞状态。写入后 3 秒自动回读校验。");
-
             SaveEngine = Config.Bind(
                 "General",
                 "SaveEngine",
@@ -152,6 +139,13 @@ namespace MaydayCareer
                 "LoadEngine",
                 true,
                 "读档时写回发动机状态。写入后 3 秒自动回读校验。");
+
+            GuardSave = Config.Bind(
+                "General",
+                "GuardSave",
+                true,
+                "存盘回退保护：当前局比存档更早（例如刚启动的新公司，第 0 段）时跳过存盘，\n" +
+                "免得把真进度抹成初始值。想强行覆盖就设 false。");
 
             LogSource.LogInfo("[MaydayCareer] 已加载 v" + Version);
 

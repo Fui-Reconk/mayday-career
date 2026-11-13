@@ -23,8 +23,6 @@ namespace MaydayCareer
         static UnityEngine.InputSystem.Key _saveKey = SaveFallback;
         static bool _loadResolved;
         static bool _saveResolved;
-        // 调试键写死 F7 —— 只是排查看的探针，不值得占一个配置项。
-        const UnityEngine.InputSystem.Key DamageKey = UnityEngine.InputSystem.Key.F7;
 
         /// <summary>解析一个热键名。失败打 warn 并返回 fallback，绝不抛。</summary>
         static UnityEngine.InputSystem.Key Resolve(string raw, UnityEngine.InputSystem.Key fallback, string what)
@@ -80,7 +78,6 @@ namespace MaydayCareer
 
             PollLoad(kb);
             PollSave(kb);
-            PollDamage(kb);
         }
 
         static void PollLoad(UnityEngine.InputSystem.Keyboard kb)
@@ -113,24 +110,5 @@ namespace MaydayCareer
             }
         }
 
-        /// <summary>
-        /// 调试用：主动在机身上打洞。
-        ///
-        /// 创伤来自随机事件，手工复现不了。这个键调游戏自己的
-        /// HullPanels.ServerBlowAt 委托（随机事件走的就是它），
-        /// 把"不可复现"变成"按一下就有"。默认不绑定。
-        /// </summary>
-        static void PollDamage(UnityEngine.InputSystem.Keyboard kb)
-        {
-            try
-            {
-                if (kb[DamageKey].wasPressedThisFrame)
-                {
-                    Plugin.LogSource.LogInfo("[MaydayCareer] 检测到 F7，调试打洞");
-                    CareerStore.DebugBreach();
-                }
-            }
-            catch (Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 打洞键异常: " + e); }
-        }
     }
 }
