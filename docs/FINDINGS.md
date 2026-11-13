@@ -124,7 +124,7 @@ Mayday.Passengers.PassengerDirector
   ServerInstallRow(int slot, bool premium)   ← public，链底
 ```
 
-`ServerInstallRow` 是 public 的低层入口，上面那一整套门槛（持有套件、在位、进度条）全在它之上。**直接调它 = 无校验、不消耗任何 `seat_kit`**。插件里的 `SeatRows` 就是这么干的，属于作弊性质，README 里已明示。
+`ServerInstallRow` 是 public 的低层入口，上面那一整套门槛（持有套件、在位、进度条）全在它之上。**直接调它 = 无校验、不消耗任何 `seat_kit`**。插件按存档 `rowMask` 还原座排时走的就是这条路（`RebuildSeats`），等价于凭存档白送座排，不带任何套件消耗。
 
 ## 升级不投递实物（重要负面结论）
 
