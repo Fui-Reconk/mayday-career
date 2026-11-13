@@ -493,42 +493,24 @@ namespace MaydayCareer
 
                 DumpHull("打洞前", hs);
 
-                // holeBuildSpot 是游戏预置的破洞候选点，长度 = 可存在的洞数。
-                // 用它们当坐标打洞，才落在机身上 —— 上一版用 transform+偏移，全部返回 -1。
-                UnityEngine.Vector3[] spots = null;
-                try
-                {
-                    var arr = hs.holeBuildSpot;
-                    if (arr != null)
-                    {
-                        spots = new UnityEngine.Vector3[arr.Length];
-                        for (int i = 0; i < arr.Length; i++) spots[i] = arr[i];
-                    }
-                }
-                catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer][hull] 读取 holeBuildSpot 失败: " + e.Message); }
+                var blow = global::Mayday.HullPanels.ServerBlowAt;
+                if (blow == null) { Plugin.LogSource.LogWarning("[MaydayCareer][hull] ServerBlowAt 为空，无法打洞"); return; }
 
-                if (spots == null || spots.Length == 0)
-                {
-                    Plugin.LogSource.LogWarning("[MaydayCareer][hull] holeBuildSpot 为空，放弃打洞");
-                    return;
-                }
-                Plugin.LogSource.LogInfo("[MaydayCareer][hull] 候选洞位=" + spots.Length
-                    + "，第0个=" + spots[0].x.ToString("F2") + "," + spots[0].y.ToString("F2") + "," + spots[0].z.ToString("F2"));
-
+                UnityEngine.Vector3 origin = hs.transform.position + UnityEngine.Vector3.up * 1.2f;
                 int ok = 0, fail = 0;
-                for (int i = 0; i < spots.Length && ok < 3; i++)
+                for (int i = 0; i < 3; i++)
                 {
                     try
                     {
-                        if (hs.HoleOpen(i)) continue;          // 已经有洞就跳过
-                        bool r = hs.ServerBreachAt(i, spots[i], 0.35f);
-                        if (r) ok++; else fail++;
-                        Plugin.LogSource.LogInfo("[MaydayCareer][hull] ServerBreachAt #" + i + " -> " + r);
+                        var pt = origin + new UnityEngine.Vector3(0.6f * i, 0f, 0.4f * i);
+                        int idx = blow.Invoke(pt, 0.25f);
+                        if (idx >= 0) ok++; else fail++;
+                        Plugin.LogSource.LogInfo("[MaydayCareer][hull] ServerBlowAt #" + i + " -> 面板=" + idx);
                     }
                     catch (Exception e)
                     {
                         fail++;
-                        Plugin.LogSource.LogWarning("[MaydayCareer][hull] ServerBreachAt #" + i + " 异常: " + e.Message);
+                        Plugin.LogSource.LogWarning("[MaydayCareer][hull] 打洞失败: " + e.Message);
                     }
                 }
                 Plugin.LogSource.LogInfo("[MaydayCareer][hull] 打洞结果 成功=" + ok + " 失败=" + fail);
@@ -550,25 +532,6 @@ namespace MaydayCareer
                     Plugin.LogSource.LogInfo(string.Format(
                         "[MaydayCareer][hull]   洞{0} x={1:F3} y={2:F3} z={3:F3} w={4:F3}", i, v.x, v.y, v.z, v.w));
                 }
-                try
-                {
-                    var placed = hs.holePlaced;
-                    if (placed != null)
-                    {
-                        var sb2 = new StringBuilder();
-                        int nz = 0;
-                        for (int i = 0; i < placed.Length; i++)
-                        {
-                            var v = placed[i];
-                            bool zero = v.x == 0f && v.y == 0f && v.z == 0f && v.w == 0f;
-                            if (!zero) nz++;
-                            if (i < 8) { if (i > 0) sb2.Append(" | "); sb2.Append(zero ? "-" : (v.x.ToString("F2") + "," + v.y.ToString("F2") + "," + v.z.ToString("F2") + ",r" + v.w.ToString("F2"))); }
-                        }
-                        Plugin.LogSource.LogInfo("[MaydayCareer][hull] " + tag + " holePlaced 长度=" + placed.Length + " 非空=" + nz + " [" + sb2 + "]");
-                    }
-                }
-                catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer][hull] holePlaced dump 失败: " + e.Message); }
-
                 var jh = hs.jetHp;
                 if (jh != null && jh.Length > 0)
                 {
