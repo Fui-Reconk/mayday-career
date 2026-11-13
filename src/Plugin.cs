@@ -29,6 +29,8 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> Verbose;
 
         internal static ConfigEntry<bool> SaveOnCrash;
+        internal static ConfigEntry<bool> AutoLoadOnStart;
+        internal static ConfigEntry<string> LoadKey;
 
         public override void Load()
         {
@@ -60,6 +62,19 @@ namespace MaydayCareer
                 "坠机（GameOver）时是否也存盘。\n" +
                 "默认 false：存档停在最后一次成功落地，坠机不覆盖，退出重进可以回到摔之前。\n" +
                 "改成 true 则坠机也计入生涯，钱亏了就真亏了。");
+
+            AutoLoadOnStart = Config.Bind(
+                "General",
+                "AutoLoadOnStart",
+                false,
+                "进入新一轮（PreShift）时自动读档。\n" +
+                "默认 false：只在你按下热键时才读，避免误覆盖当前进度。");
+
+            LoadKey = Config.Bind(
+                "General",
+                "LoadKey",
+                "F9",
+                "手动读档热键。取 UnityEngine.InputSystem.Key 的名字，例如 F9 / F10 / K。");
 
             LogSource.LogInfo("[MaydayCareer] 已加载 v" + Version);
 

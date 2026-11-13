@@ -61,8 +61,20 @@ BepInEx\config\local.mayday.career.cfg
 
 | 项 | 默认 | 说明 |
 |---|---|---|
-| `AutoSave` | `true` | 每趟航班结算后自动存盘 |
+| `AutoSave` | `true` | 成功落地 / 周转阶段自动存盘 |
+| `SaveOnCrash` | `false` | 坠机（GameOver）是否也存盘。默认不存，存档停在最后一次成功落地 |
+| `AutoLoadOnStart` | `false` | 进入新一轮时自动读档。默认关闭，改为手动按热键 |
+| `LoadKey` | `F9` | 手动读档热键（`UnityEngine.InputSystem.Key` 的名字） |
 | `ClearBeforeLoad` | `false` | 读档后钱变成两倍时改成 `true` |
+| `Verbose` | `true` | 打印导演机的每次阶段切换，排查用 |
+
+## 存档语义
+
+- **存**：成功落地后（`Arrived` / `Turnaround`）
+- **不存**：坠机（`GameOver`），除非把 `SaveOnCrash` 打开
+- **读**：默认手动，游戏内按 `F9`
+
+之所以坠机不存：游戏的设计是失败即整轮作废（`GameOver` 之后立刻回 `PreShift` 重开）。在这里存盘等于把 roguelike 改成检查点，而且会当场把罚完的余额固化进下一轮。
 
 ## 验证装好了
 

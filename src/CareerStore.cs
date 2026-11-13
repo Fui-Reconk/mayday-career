@@ -208,6 +208,13 @@ namespace MaydayCareer
             _applied = false;
         }
 
+        /// <summary>手动读档：无视一次性标记，立即应用。</summary>
+        public static void ApplyForce()
+        {
+            _applied = true;
+            Apply();
+        }
+
         public static void Apply()
         {
             var s = Load();

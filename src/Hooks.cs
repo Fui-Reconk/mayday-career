@@ -62,10 +62,13 @@ namespace MaydayCareer
 
                 switch (stage)
                 {
-                    // 新一轮开始：读档。这里绝不能存盘，否则会用开局初始值覆盖存档。
+                    // 新一轮开始。默认不自动读档 —— 只在按下热键时读，
+                    // 免得开局就把当前进度覆盖掉。想在开局自动读的把 AutoLoadOnStart 打开。
                     case global::Mayday.Airport.DirectorStage.PreShift:
                         CareerStore.LogNetworkMode();
-                        CareerStore.ApplyOnce();
+                        if (Plugin.AutoLoadOnStart.Value) CareerStore.ApplyOnce();
+                        else Plugin.LogSource.LogInfo(
+                            "[MaydayCareer] 手动模式：按 " + Plugin.LoadKey.Value + " 读档（" + CareerStore.FilePath + "）");
                         break;
 
                     // 落地 / 下一段周转：都是成功飞行之后，可以安全存盘。
@@ -102,8 +105,24 @@ namespace MaydayCareer
         private static void Postfix()
         {
             CareerStore.ResetApplyFlag();
-            try { CareerStore.ApplyOnce(); }
-            catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 读档异常: " + e); }
+            if (Plugin.AutoLoadOnStart.Value) CareerStore.ApplyOnce();
+        }
+    }
+
+    /// <summary>
+    /// 每帧轮询热键。
+    ///
+    /// 挂在 Mirror.NetworkManager.Update 上：IL2CPP 下不能自建 MonoBehaviour，
+    /// 而 Update 是唯一能确定每帧都执行的现成方法（NetworkManager 全程存在）。
+    /// </summary>
+    [HarmonyPatch]
+    internal static class TickHook
+    {
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(global::Mirror.NetworkManager), "Update")]
+        private static void Postfix()
+        {
+            Hotkey.Poll();
         }
     }
 }
