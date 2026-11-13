@@ -20,7 +20,7 @@
 | 评级 / 难度 | `Rating` / `Difficulty` |
 | 累计收入 / 累计乘客 | 生涯统计 |
 | 升级台账 | `Upgrades`（`SyncList<string>`），按 id 逐条写回 |
-| **座排** | `rowMask` 位图 + 可选的"补足到 N 排"（见 `SeatRows`） |
+| **座排** | `rowMask` 位图，按存档原样还原 |
 | **客舱物品** | 灭火器、锤子、胶带、油桶、座位套件等实体物品的完整快照（实测 37 件级别） |
 
 **座排为什么要单独存**：升级是"台账"，而座排是买 `seat_kit` 之后**物理装出来**的实体。只把升级列表写回去，座位不会自己长出来。
@@ -97,7 +97,6 @@ BepInEx\config\local.mayday.career.cfg
 | `AutoLoadOnStart` | `false` | 进入新一轮时自动读档。默认关闭，改为手动按热键 |
 | `LoadKey` | `F9` | 读档热键 |
 | `SaveKey` | `J` | 存盘热键 |
-| `SeatRows` | `3` | 读档后把座排补到这个数量，`0` = 不干预。默认 3 等于游戏原始开局排数，即不做额外补足 |
 | `SaveItems` | `true` | 存盘时一并快照客舱物品 |
 | `LoadItems` | `true` | 读档时把物品补回场景（幂等） |
 | `ClearBeforeLoad` | `false` | 读档后钱变成两倍时改成 `true` |
@@ -109,15 +108,13 @@ BepInEx\config\local.mayday.career.cfg
 |---|---|---|
 | `DumpOnLoad` | `true` | 读档后把升级目录 / 物品目录 / 座位状态 / 补给站状态打进日志。排查用，稳定后关掉 |
 
-### ⚠️ `SeatRows` 是作弊性补足
+### ⚠️ 座排还原不消耗套件
 
-`SeatRows` 直接调 `PassengerDirector.ServerInstallRow`，**绕过游戏原有的套件校验**——不需要手持 `seat_kit`，不校验你站在哪个座排位，也不走安装进度条，因此**不消耗任何 `seat_kit`**（正常一张 350 元/排）。
+存档里记的是 `rowMask` 位图（第 i 位 = 第 i 排已装）。读档时对"存档置位、当前没装"的排直接调 `PassengerDirector.ServerInstallRow`，**绕过游戏原有的套件校验**——不需要手持 `seat_kit`，不校验站位，也不走安装进度条，因此**不消耗任何 `seat_kit`**（正常 350 元/排）。
 
-换句话说是"凭空多出几排座椅"。想要靠攒钱买座位的体验，把它设成 `0`。
+也就是说：**座排数量完全由存档决定**，插件不做"补到 N 排"这类额外补足。想让客舱多几排，改存档里的 `seatRowMask`（位图，`255` = 8 排），或者正常买套件装好再按 `J` 存盘。
 
-同时它也没有超出物理限制：上限取 `min(8, PlaneLayout.SeatRowZ.Length)`——`rowMask` 是 `Byte`（8 位），而 `SeatRowZ` 数组长度是机身几何上真正有几个座排位。超出的补不出来。
-
-补装只加不删：当前排数已经多于 `SeatRows` 时不会拆排。
+补装只加不删：存档里置位少于当前已装的排数时，不会拆排。
 
 ## 存档语义
 
