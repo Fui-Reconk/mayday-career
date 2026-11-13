@@ -21,6 +21,24 @@ namespace MaydayCareer
     }
 
     /// <summary>
+    /// 整轮结束（RunSummary）时再存一次。
+    /// 一趟 run 含多个航段，ServerShowReport 是按航段出的，
+    /// 这个才是整轮收尾 —— 两者都存，后写的覆盖先写的。
+    /// </summary>
+    [HarmonyPatch]
+    internal static class RunSummaryHook
+    {
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(global::Mayday.GameState), "ServerShowRunSummary")]
+        private static void Postfix()
+        {
+            if (!Plugin.AutoSave.Value) return;
+            try { CareerStore.Save(); }
+            catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 存盘异常: " + e); }
+        }
+    }
+
+    /// <summary>
     /// 开局重置后读档。
     /// ServerResetRun(int,int) 会把 Money/Leg/Upgrades 全部重置成新开局状态，
     /// 所以必须在它之后写回，否则会被覆盖 —— 和 ApplyDefaults 把
