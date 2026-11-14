@@ -508,10 +508,22 @@ namespace MaydayCareer
 
         public static void Save()
         {
+            // 自动存盘的调用点（阶段机）不关心结果；返回值给手动入口用
+            TrySave();
+        }
+
+        /// <summary>
+        /// 尝试存盘。返回 null = 已提交写盘（后台线程完成落盘）；
+        /// 返回字符串 = 跳过原因（GameState 未就绪 / GuardSave 拦截）。
+        /// 菜单按钮用返回值在 toast 里如实告知用户，不能静默返回——
+        /// 之前按钮误报"已存盘"，实际被 GuardSave 拦了，用户以为存的逻辑没生效。
+        /// </summary>
+        public static string TrySave()
+        {
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
             var gs = global::Mayday.GameState.Instance;
-            if (gs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] GameState 为空，跳过存盘"); return; }
+            if (gs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] GameState 为空，跳过存盘"); return "GameState 未就绪，跳过存盘"; }
 
             // 档位回退保护：刚启动时游戏总是从「第 0 段、600 块」的新公司开始，
             // 这时候按 J 就会把真进度抹成初始值（实测踩过：钱 1300 -> 600）。
@@ -522,11 +534,14 @@ namespace MaydayCareer
                 int savedLeg = GetCachedSavedLeg();
                 if (savedLeg > gs.Leg)
                 {
+                    string reason = string.Format(
+                        "已跳过：当前第{0}段，存档已是第{1}段（更靠后），不覆盖",
+                        gs.Leg, savedLeg);
                     Plugin.LogSource.LogWarning(string.Format(
                         "[MaydayCareer] 存盘已跳过：当前是第{0}段，存档是第{1}段（更靠后）。"
                         + "刚开的新公司别急着存盘，先按读档键把进度拿回来。",
                         gs.Leg, savedLeg));
-                    return;
+                    return reason;
                 }
             }
 
@@ -590,6 +605,7 @@ namespace MaydayCareer
                     t.Start();
                 }
             }
+            return null; // 已提交后台写盘
         }
 
         // 后台写盘的单消费者模型。_pendingJson 单槽：连续两次存盘时
@@ -1454,8 +1470,10 @@ namespace MaydayCareer
         /// 和自动存盘的区别只有两处守卫：必须处在服务端，且 GameState 已就绪。
         /// 纯客户端按热键时只打警告，绝不写盘 —— 否则客户端会用自己那份
         /// 不完整的状态覆盖房主的存档。
+        ///
+        /// 返回 null = 已提交写盘；否则 = 跳过原因（菜单按钮会显示给玩家）。
         /// </summary>
-        public static void SaveManual()
+        public static string SaveManual()
         {
             try
             {
@@ -1466,20 +1484,21 @@ namespace MaydayCareer
                 {
                     Plugin.LogSource.LogWarning(
                         "[MaydayCareer] 手动存盘跳过：当前不是房主/服务端（纯客户端不写盘）");
-                    return;
+                    return "只有房主能存盘（纯客户端不写盘）";
                 }
 
                 if (global::Mayday.GameState.Instance == null)
                 {
                     Plugin.LogSource.LogWarning("[MaydayCareer] 手动存盘跳过：GameState 还没就绪");
-                    return;
+                    return "GameState 还没就绪";
                 }
 
-                Save();
+                return TrySave();
             }
             catch (Exception e)
             {
                 Plugin.LogSource.LogError("[MaydayCareer] 手动存盘异常: " + e);
+                return "存盘异常：" + e.Message;
             }
         }
 
