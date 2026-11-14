@@ -152,7 +152,8 @@ namespace MaydayCareer
                 if (mouse != null)
                 {
                     Vector2 delta = mouse.scroll.ReadValue();
-                    if (delta.y != 0f) ScrollBy(-delta.y * 0.4f);
+                    // 一格滚轮 ≈ 一行（Windows 滚轮一格 120，行距 108）
+                    if (delta.y != 0f) ScrollBy(-delta.y * 0.9f);
                 }
             }
             catch (Exception e)
@@ -192,12 +193,13 @@ namespace MaydayCareer
                     if (_rows[i].go.activeSelf != vis) _rows[i].go.SetActive(vis);
                 }
 
-                // 滚动条把手：纯视觉，位置按滚动进度手算
+                // 滚动条把手：纯视觉，位置按滚动进度手算。
+                // 把手锚点在轨道底边（anchorMin/Max.y = 0），anchoredPosition 从锚点起算。
                 if (_sbHandle != null && _maxScroll > 0f)
                 {
                     float progress = _scrollOffset / _maxScroll;
                     float travel = _viewportH - _sbHandleH;
-                    _sbHandle.anchoredPosition = new Vector2(0f, -(_viewportH / 2f - _sbHandleH / 2f) + (1f - progress) * travel);
+                    _sbHandle.anchoredPosition = new Vector2(0f, _viewportH - _sbHandleH / 2f - progress * travel);
                 }
             }
             catch { }
@@ -226,6 +228,16 @@ namespace MaydayCareer
                 }
                 _scrollOffset = 0f;
                 ApplyScroll(); // 回到顶部 + 刷新行可见性
+
+                // 把游戏的 UI 导航焦点锁到我们的行上：否则方向键会同时移动
+                // 暂停菜单里游戏自己的候选高亮（EventSystem 导航，拦不住轮询只能改焦点）
+                try
+                {
+                    var es = UnityEngine.EventSystems.EventSystem.current;
+                    if (es != null && _rows.Count > 0) es.SetSelectedGameObject(_rows[0].go);
+                }
+                catch { }
+
                 _root.SetActive(true);
                 Plugin.LogSource.LogInfo("[MaydayCareer] 打开" + (saveMode ? "存" : "读") + "档选档界面（自动 + " + slots + " 手动档）");
             }
@@ -244,6 +256,13 @@ namespace MaydayCareer
                     _lastCloseFrame = UnityEngine.Time.frameCount;
                     _root.SetActive(false);
                 }
+                // 归还 UI 导航焦点，让游戏的 EventSystem 恢复自己的候选逻辑
+                try
+                {
+                    var es = UnityEngine.EventSystems.EventSystem.current;
+                    if (es != null) es.SetSelectedGameObject(null);
+                }
+                catch { }
             }
             catch { }
             _armedSlot = 0;
