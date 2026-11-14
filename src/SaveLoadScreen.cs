@@ -33,6 +33,7 @@ namespace MaydayCareer
 
         static GameObject _root;        // Canvas 根（场景切换会被销毁，销毁后重建）
         static Text _title;
+        static Text _subtitle;
         static readonly List<Row> _rows = new List<Row>();
         static bool _saveMode;
         static int _builtRows = -1;
@@ -46,6 +47,9 @@ namespace MaydayCareer
 
         public static bool IsOpen => _root != null && _root.activeSelf;
 
+        // 二次确认状态：_armedSlot = 已点过一次、等待确认的档位（0 = 无）
+        static int _armedSlot;
+
         /// <summary>打开选档面板。saveMode=true 存盘模式，false 读档模式。</summary>
         public static void Open(bool saveMode)
         {
@@ -53,9 +57,11 @@ namespace MaydayCareer
             {
                 EnsureBuilt();
                 _saveMode = saveMode;
-                _title.text = saveMode
-                    ? "存档 —— 选择要写入的档位（写入会覆盖该档，上一份自动备份）"
-                    : "读档 —— 选择要读取的档位（读取会覆盖当前进度）";
+                _armedSlot = 0;
+                _title.text = saveMode ? "存档 —— 选择要写入的档位" : "读档 —— 选择要读取的档位";
+                _subtitle.text = saveMode
+                    ? "写入会覆盖所选档位（上一份自动留成 .bak）"
+                    : "读取会覆盖当前进度（档位文件本身不受影响）";
 
                 int slots = CareerStore.SlotCount;
                 for (int i = 0; i < _rows.Count; i++)
@@ -77,6 +83,7 @@ namespace MaydayCareer
         {
             try { if (_root != null) _root.SetActive(false); }
             catch { }
+            _armedSlot = 0;
         }
 
         static void FillRow(Row row, int slot)
@@ -85,6 +92,20 @@ namespace MaydayCareer
             row.label.text = info == null
                 ? "档位 " + slot + "　　（空）"
                 : "档位 " + slot + "　　" + info;
+            row.label.color = new Color(0.92f, 0.94f, 0.98f, 1f);
+        }
+
+        /// <summary>解除确认状态，把行文字恢复成档位信息。</summary>
+        static void Disarm()
+        {
+            if (_armedSlot <= 0) return;
+            int slot = _armedSlot;
+            _armedSlot = 0;
+            for (int i = 0; i < _rows.Count; i++)
+            {
+                int s = i + 1;
+                if (s == slot && _rows[i].go.activeSelf) { FillRow(_rows[i], s); return; }
+            }
         }
 
         // ---------- 构建 ----------
@@ -139,7 +160,7 @@ namespace MaydayCareer
             dimBtn.onClick.AddListener(Wrap(Close));
 
             // 面板本体
-            float panelH = 300f + CareerStore.SlotCount * RowStep;
+            float panelH = 340f + CareerStore.SlotCount * RowStep;
             var panel = NewImage(rt, "Panel", new Color(0.12f, 0.14f, 0.19f, 0.985f));
             var prt = panel.transform.TryCast<UnityEngine.RectTransform>();
             prt.sizeDelta = new Vector2(980f, panelH);
@@ -147,11 +168,17 @@ namespace MaydayCareer
             Font font = GetCjkFont();
             Plugin.LogSource.LogInfo("[MaydayCareer] 构建选档界面: 面板+字体 ok（font=" + (font != null ? font.name : "null") + "）");
 
-            // 标题
+            // 标题（一行短句，别让长文案溢出面板）
             _title = NewText(panel.transform, "Title", "", font, 34, Color.white);
             var trt = _title.transform.TryCast<UnityEngine.RectTransform>();
-            trt.anchoredPosition = new Vector2(0f, panelH / 2f - 75f);
-            trt.sizeDelta = new Vector2(940f, 60f);
+            trt.anchoredPosition = new Vector2(0f, panelH / 2f - 55f);
+            trt.sizeDelta = new Vector2(940f, 44f);
+
+            // 副标题：灰色小字说明覆盖后果
+            _subtitle = NewText(panel.transform, "Subtitle", "", font, 22, new Color(0.62f, 0.66f, 0.72f, 1f));
+            var srt = _subtitle.transform.TryCast<UnityEngine.RectTransform>();
+            srt.anchoredPosition = new Vector2(0f, panelH / 2f - 103f);
+            srt.sizeDelta = new Vector2(940f, 30f);
 
             // 档位行
             int n = CareerStore.SlotCount;
@@ -162,7 +189,7 @@ namespace MaydayCareer
                 var rowGo = NewImage(panel.transform, "Slot" + slot, new Color(0.20f, 0.23f, 0.31f, 1f));
                 var rrt = rowGo.transform.TryCast<UnityEngine.RectTransform>();
                 rrt.sizeDelta = new Vector2(900f, RowH);
-                rrt.anchoredPosition = new Vector2(0f, panelH / 2f - 145f - i * RowStep);
+                rrt.anchoredPosition = new Vector2(0f, panelH / 2f - 180f - i * RowStep);
 
                 var btn = rowGo.AddComponent<Button>();
                 btn.targetGraphic = rowGo.GetComponent<Image>();
@@ -214,6 +241,19 @@ namespace MaydayCareer
         {
             try
             {
+                // 二次确认：存盘模式下点"已有数据"的档位，第一次点先确认，再点才执行。
+                // 空档直接写入；读档不确认（档位文件不会因读取而变化）。
+                if (_saveMode && _armedSlot != slot && CareerStore.SlotInfo(slot) != null)
+                {
+                    Disarm();
+                    _armedSlot = slot;
+                    var row = _rows[slot - 1];
+                    row.label.text = "确认覆盖档位 " + slot + "？再点一次执行（现有内容会自动备份）";
+                    row.label.color = new Color(1f, 0.72f, 0.30f, 1f);
+                    return;
+                }
+                Disarm();
+
                 CareerStore.SetActiveSlot(slot);
                 try
                 {
@@ -225,38 +265,34 @@ namespace MaydayCareer
 
                 if (_saveMode)
                 {
-                    string reason = CareerStore.TrySave();
+                    // 选档界面里的覆盖是带二次确认的明确操作，跳过 GuardSave 的段数拦截
+                    string reason = CareerStore.SaveManual(skipLegGuard: true);
                     if (reason == null)
                     {
                         var gs = global::Mayday.GameState.Instance;
-                        MenuButtons2Toast(gs != null
+                        MenuButtons.Toast(gs != null
                             ? "已存盘[档" + slot + "]：第" + gs.Leg + "段 · " + gs.Money + " 块"
                             : "已存盘", global::Mayday.NotifyKind.Good);
                     }
                     else
                     {
-                        MenuButtons2Toast(reason, global::Mayday.NotifyKind.Warning);
-                        return; // 没存上，留在界面里让用户换行重试
+                        MenuButtons.Toast(reason, global::Mayday.NotifyKind.Warning);
+                        FillRow(_rows[slot - 1], slot); // 恢复行文字，留在界面里让用户换行重试
+                        return;
                     }
                 }
                 else
                 {
                     CareerStore.ApplyForce();
-                    MenuButtons2Toast("已读档[档" + slot + "]", global::Mayday.NotifyKind.Good);
+                    MenuButtons.Toast("已读档[档" + slot + "]", global::Mayday.NotifyKind.Good);
                 }
                 Close();
             }
             catch (Exception e)
             {
                 Plugin.LogSource.LogError("[MaydayCareer] 选档操作异常: " + e);
-                MenuButtons2Toast("操作失败，详见日志", global::Mayday.NotifyKind.Danger);
+                MenuButtons.Toast("操作失败，详见日志", global::Mayday.NotifyKind.Danger);
             }
-        }
-
-        /// <summary>复用通知条：逻辑和暂停菜单按钮一致，直接调用那边的方法。</summary>
-        static void MenuButtons2Toast(string msg, global::Mayday.NotifyKind kind)
-        {
-            MenuButtons.Toast(msg, kind);
         }
 
         // ---------- UI 件工厂 ----------

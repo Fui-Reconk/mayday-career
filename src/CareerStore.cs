@@ -591,8 +591,13 @@ namespace MaydayCareer
         /// 返回字符串 = 跳过原因（GameState 未就绪 / GuardSave 拦截）。
         /// 菜单按钮用返回值在 toast 里如实告知用户，不能静默返回——
         /// 之前按钮误报"已存盘"，实际被 GuardSave 拦了，用户以为存的逻辑没生效。
+        ///
+        /// manual=true 跳过 GuardSave：选档界面里点行覆盖是带二次确认的明确操作，
+        /// 不该被自动拦截（v1.3.0 用户反馈"低档覆盖的去了吧"）。
+        /// 拦截保留给没有确认环节的路径：自动存盘（Arrived/Turnaround）与热键 ——
+        /// 新公司落地自动存盘仍然不能抹掉真档。
         /// </summary>
-        public static string TrySave()
+        public static string TrySave(bool manual = false)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
@@ -605,7 +610,7 @@ namespace MaydayCareer
             // 这时候按 J 就会把真进度抹成初始值（实测踩过：钱 1300 -> 600）。
             // 当前局比存档更早，就跳过并提示，让用户先读档。
             // leg 从内存缓存取（按档位），不再整文件重读。
-            if (Plugin.GuardSave.Value)
+            if (!manual && Plugin.GuardSave.Value)
             {
                 int savedLeg = GetCachedSavedLeg(slot);
                 if (savedLeg > gs.Leg)
@@ -1540,15 +1545,12 @@ namespace MaydayCareer
         }
 
         /// <summary>
-        /// 手动存盘入口（热键用）。
+        /// 手动存盘入口。返回 null = 已提交写盘；否则 = 跳过原因（菜单按钮会显示给玩家）。
         ///
-        /// 和自动存盘的区别只有两处守卫：必须处在服务端，且 GameState 已就绪。
-        /// 纯客户端按热键时只打警告，绝不写盘 —— 否则客户端会用自己那份
-        /// 不完整的状态覆盖房主的存档。
-        ///
-        /// 返回 null = 已提交写盘；否则 = 跳过原因（菜单按钮会显示给玩家）。
+        /// skipLegGuard=true 跳过 GuardSave —— 选档界面专用：那里的覆盖
+        /// 已经过了二次确认，是明确操作；热键 J 没有确认环节，保持拦截。
         /// </summary>
-        public static string SaveManual()
+        public static string SaveManual(bool skipLegGuard = false)
         {
             try
             {
@@ -1568,7 +1570,7 @@ namespace MaydayCareer
                     return "GameState 还没就绪";
                 }
 
-                return TrySave();
+                return TrySave(skipLegGuard);
             }
             catch (Exception e)
             {

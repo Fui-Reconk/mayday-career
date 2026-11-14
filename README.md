@@ -170,7 +170,7 @@ BepInEx\config\local.mayday.career.cfg
 | `AutoLoadOnStart` | `false` | 进入新一轮时自动读档。默认关闭，改为手动按热键 |
 | `LoadKey` | `F9` | 读档热键 |
 | `SaveKey` | `J` | 存盘热键 |
-| `GuardSave` | `true` | 存盘回退保护：当前局比存档更早时拒绝写盘 |
+| `GuardSave` | `true` | 存盘回退保护：当前局比存档更早时拒绝写盘。只拦自动存盘与热键；选档界面里的覆盖有二次确认，不受此限 |
 | `MenuButtons` | `true` | 暂停菜单（ESC）里显示「存盘 / 读档」按钮，点击弹出选档界面 |
 | `SaveSlots` | `3` | 存档档位数（1-6）。档1 = 主档 `career.json`；档2+ = `career.slotN.json` |
 | `ActiveSlot` | `1` | 上次使用的档位（选档界面点行时自动写回，一般不用手改） |
