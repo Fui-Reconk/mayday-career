@@ -33,11 +33,15 @@ namespace MaydayCareer
         public List<float> tanks = new List<float>();
         public bool hasFuelField;
 
-        // 机翼掉漆：paintCover 是 per-外皮块的"还剩多少漆"，1 = 完好。
-        // 掉漆在游戏里不会自己恢复（玩家要拿喷漆去补），所以属于真状态，值得存。
-        // paintInit=false 时这个数组只是全零占位，不能当成"整机掉漆"。
-        public List<float> paintCover = new List<float>();
-        public bool hasPaintField;
+        // 机体：损伤（per-panel 数组）+ 掉漆（shown*/coverDamage 外观链）。
+        // 关键认知（v1.1.0 翻案）：
+        //   - holes/damage/dirt 是 per-panel 列表，Count 必须等于 HullSystem.Count；
+        //     初始化没完成时 Count 会从 11 涨到 12 —— 那不是"多了一个洞"
+        //   - breaches/jetSync/sectSync 只是汇总位图，jetHp 是派生值
+        //   - 渲染读的是 shownMain/shownAccent，不是 paintCover；
+        //     重绘入口是 ApplyAllSectionPaint + MarkAllDirty，不是 TickPaint
+        //   - 前置判据是 serverReady，不是 paintInit
+        public HullRec hull;
 
 
         // 发动机：每台一条记录。state/faults/rpm/cowl 都是 SyncVar，
@@ -108,6 +112,160 @@ namespace MaydayCareer
             return list;
         }
 
+        // ---------- 机体存档结构 ----------
+
+        public sealed class HullPanelRec
+        {
+            public float damage;       // lDamage[i]  本地面板损伤
+            public float netDamage;    // damage[i]   同步面板损伤
+            public float dirt;         // lDirt[i]    本地脏污
+            public float netDirt;      // dirt[i]     同步脏污
+            public bool hasHole;
+            public float hx, hy, hz, hr;   // holes[i] = (x, y, z, 半径)
+            public float patchT;           // 补丁进度
+            public bool hasPatchAge;
+            public float patchAge;         // Time.time - patchLast，存 age 不存绝对时间
+        }
+
+        public sealed class HullSectionRec
+        {
+            public int stage;          // sStage[j]，HullSystem.StagePaint 是"待喷漆"那一档
+            public float progress;     // sProg[j]
+        }
+
+        public sealed class HullPaintRec
+        {
+            // 每个颜色都是 [r,g,b,a]。mainColor/accentColor 是 SyncList（网络），
+            // lMain/lAccent 是本地；shown* 才是渲染读的 —— 之前只写 paintCover 所以看不见
+            public List<float> main = new List<float>();
+            public List<float> accent = new List<float>();
+            public List<float> netMain = new List<float>();
+            public List<float> netAccent = new List<float>();
+            public List<float> shownMain = new List<float>();
+            public List<float> shownAccent = new List<float>();
+            public List<float> goalMain = new List<float>();
+            public List<float> goalAccent = new List<float>();
+            public float glideMain;
+            public float glideAccent;
+            public float cover;        // paintCover[i]
+            public float coverDamage;  // coverDamage[i] —— 这才是"掉漆量"
+        }
+
+        public sealed class HullRec
+        {
+            public int breaches;
+            public string sectSync = "0";
+            public List<HullPanelRec> panels = new List<HullPanelRec>();
+            public List<HullSectionRec> sections = new List<HullSectionRec>();
+            public List<HullPaintRec> paint = new List<HullPaintRec>();
+        static void PutColorArr(StringBuilder sb, string name, List<float> v)
+        {
+            sb.Append('\"').Append(name).Append("\": [");
+            for (int i = 0; i < v.Count; i++) { if (i > 0) sb.Append(", "); sb.Append(Json.Num(v[i])); }
+            sb.Append(']');
+        }
+
+        public void HullToJson(StringBuilder sb)
+        {
+            sb.Append("{\n");
+            sb.Append("        \"breaches\": ").Append(breaches).Append(",\n");
+            sb.Append("        \"sectSync\": "); Json.Escape(sb, sectSync ?? "0"); sb.Append(",\n");
+            sb.Append("        \"panels\": [");
+            for (int i = 0; i < panels.Count; i++)
+            {
+                var p = panels[i];
+                if (i > 0) sb.Append(',');
+                sb.Append("\n            {\"damage\": ").Append(Json.Num(p.damage));
+                sb.Append(", \"netDamage\": ").Append(Json.Num(p.netDamage));
+                sb.Append(", \"dirt\": ").Append(Json.Num(p.dirt));
+                sb.Append(", \"netDirt\": ").Append(Json.Num(p.netDirt));
+                sb.Append(", \"hole\": [").Append(Json.Num(p.hx)).Append(", ").Append(Json.Num(p.hy))
+                   .Append(", ").Append(Json.Num(p.hz)).Append(", ").Append(Json.Num(p.hr)).Append(']');
+                sb.Append(", \"patchT\": ").Append(Json.Num(p.patchT));
+                if (p.hasPatchAge) sb.Append(", \"patchAge\": ").Append(Json.Num(p.patchAge));
+                sb.Append('}');
+            }
+            sb.Append("\n        ],\n");
+            sb.Append("        \"sections\": [");
+            for (int i = 0; i < sections.Count; i++)
+            {
+                var q = sections[i];
+                if (i > 0) sb.Append(", ");
+                sb.Append("\n            {\"stage\": ").Append(q.stage)
+                   .Append(", \"progress\": ").Append(Json.Num(q.progress)).Append('}');
+            }
+            sb.Append("\n        ],\n");
+            sb.Append("        \"paint\": [");
+            for (int i = 0; i < paint.Count; i++)
+            {
+                var q = paint[i];
+                if (i > 0) sb.Append(',');
+                sb.Append("\n            {");
+                PutColorArr(sb, "main", q.main); sb.Append(", ");
+                PutColorArr(sb, "accent", q.accent); sb.Append(", ");
+                PutColorArr(sb, "netMain", q.netMain); sb.Append(", ");
+                PutColorArr(sb, "netAccent", q.netAccent); sb.Append(", ");
+                PutColorArr(sb, "shownMain", q.shownMain); sb.Append(", ");
+                PutColorArr(sb, "shownAccent", q.shownAccent); sb.Append(", ");
+                PutColorArr(sb, "goalMain", q.goalMain); sb.Append(", ");
+                PutColorArr(sb, "goalAccent", q.goalAccent); sb.Append(", ");
+                sb.Append("\"glideMain\": ").Append(Json.Num(q.glideMain));
+                sb.Append(", \"glideAccent\": ").Append(Json.Num(q.glideAccent));
+                sb.Append(", \"cover\": ").Append(Json.Num(q.cover));
+                sb.Append(", \"coverDamage\": ").Append(Json.Num(q.coverDamage));
+                sb.Append('}');
+            }
+            sb.Append("\n        ]\n    }");
+        }
+        }
+
+        public static HullRec ParseHull(Dictionary<string, object> d)
+        {
+            if (d == null || !d.TryGetValue("hull", out var hv) || !(hv is Dictionary<string, object> hd)) return null;
+            var rec = new HullRec
+            {
+                breaches = Json.GetInt(hd, "breaches", 0),
+                sectSync = Json.GetStr(hd, "sectSync", "0"),
+            };
+            foreach (var po in Json.GetObjList(hd, "panels"))
+            {
+                var p = new HullPanelRec
+                {
+                    damage = Json.GetFloat(po, "damage", 0f),
+                    netDamage = Json.GetFloat(po, "netDamage", 0f),
+                    dirt = Json.GetFloat(po, "dirt", 0f),
+                    netDirt = Json.GetFloat(po, "netDirt", 0f),
+                    patchT = Json.GetFloat(po, "patchT", 0f),
+                };
+                var hole = Json.GetFloatList(po, "hole");
+                if (hole.Count >= 4) { p.hx = hole[0]; p.hy = hole[1]; p.hz = hole[2]; p.hr = hole[3]; p.hasHole = hole[3] > 0f; }
+                if (po.TryGetValue("patchAge", out var pa) && pa is double pd) { p.hasPatchAge = true; p.patchAge = (float)pd; }
+                rec.panels.Add(p);
+            }
+            foreach (var so in Json.GetObjList(hd, "sections"))
+                rec.sections.Add(new HullSectionRec { stage = Json.GetInt(so, "stage", 0), progress = Json.GetFloat(so, "progress", 0f) });
+            foreach (var qo in Json.GetObjList(hd, "paint"))
+            {
+                rec.paint.Add(new HullPaintRec
+                {
+                    main = Json.GetFloatList(qo, "main"),
+                    accent = Json.GetFloatList(qo, "accent"),
+                    netMain = Json.GetFloatList(qo, "netMain"),
+                    netAccent = Json.GetFloatList(qo, "netAccent"),
+                    shownMain = Json.GetFloatList(qo, "shownMain"),
+                    shownAccent = Json.GetFloatList(qo, "shownAccent"),
+                    goalMain = Json.GetFloatList(qo, "goalMain"),
+                    goalAccent = Json.GetFloatList(qo, "goalAccent"),
+                    glideMain = Json.GetFloat(qo, "glideMain", 0f),
+                    glideAccent = Json.GetFloat(qo, "glideAccent", 0f),
+                    cover = Json.GetFloat(qo, "cover", 1f),
+                    coverDamage = Json.GetFloat(qo, "coverDamage", 0f),
+                });
+            }
+            return rec;
+        }
+
+
         public string ToJson()
         {
             var sb = new StringBuilder();
@@ -136,13 +294,12 @@ namespace MaydayCareer
                 sb.Append(Json.Num(tanks[ti]));
             }
             sb.Append("],\n");
-            sb.Append("    \"paintCover\": [");
-            for (int pi = 0; pi < paintCover.Count; pi++)
+            if (hull != null)
             {
-                if (pi > 0) sb.Append(", ");
-                sb.Append(Json.Num(paintCover[pi]));
+                sb.Append("    \"hull\": ");
+                hull.HullToJson(sb);
+                sb.Append(",\n");
             }
-            sb.Append("],\n");
             sb.Append("    \"upgrades\": [");
             for (int i = 0; i < upgrades.Count; i++)
             {
@@ -196,8 +353,7 @@ namespace MaydayCareer
                 fuelCapacity = Json.GetFloat(d, "fuelCapacity", 0f),
                 reserveSync = Json.GetFloat(d, "reserveSync", 0f),
                 tanks = Json.GetFloatList(d, "tanks"),
-                paintCover = Json.GetFloatList(d, "paintCover"),
-                hasPaintField = d.ContainsKey("paintCover"),
+                hull = ParseHull(d),
                 hasFuelField = d.ContainsKey("fuelL"),
                 upgrades = Json.GetStrList(d, "upgrades"),
                 hasEngineField = d.ContainsKey("engines"),
@@ -364,7 +520,7 @@ namespace MaydayCareer
             // 世界物品快照：座排之外，"客舱里的器材"全部来自补给站购买，
             // 游戏自身完全不持久化，只能我们自己扫场景存下来。
             if (Plugin.SaveFuel.Value) ReadFuel(s);
-            if (Plugin.SavePaint.Value) ReadPaint(s);
+            if (Plugin.SaveHull.Value) ReadHull(s);
             if (Plugin.SaveEngine.Value) ReadEngines(s);
             int skipped = 0;
             if (Plugin.SaveItems.Value) s.items = RecordItems(out skipped);
@@ -548,7 +704,7 @@ namespace MaydayCareer
                 before, gs.Money, s.money, gs.Debt, gs.Leg, gs.CurrentAirport, added));
             RebuildSeats(s.seatRowMask, s.seatRows, s.hasSeatRowField);
             if (Plugin.LoadFuel.Value) RestoreFuel(s);
-            if (Plugin.LoadPaint.Value) RestorePaint(s);
+            if (Plugin.LoadHull.Value) RestoreHull(s);
             if (Plugin.LoadEngine.Value) RestoreEngines(s);
             RestoreItemsOnLoad(s.items);
             DumpCatalog(s);
@@ -709,85 +865,305 @@ namespace MaydayCareer
             catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 发动机校验失败: " + e.Message); }
         }
 
-        // ---------- 机翼掉漆 ----------
+        // ---------- 机体：损伤 + 掉漆 ----------
 
-        static void ReadPaint(CareerState s)
+        static global::Mayday.Systems.HullSystem FindHull()
         {
-            s.paintCover.Clear();
-            try
-            {
-                var hs = UnityEngine.Object.FindObjectOfType<global::Mayday.Systems.HullSystem>();
-                if (hs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] 掉漆快照跳过：HullSystem 未就绪"); return; }
-
-                bool ready = false;
-                try { ready = hs.paintInit; } catch { }
-                if (!ready)
-                {
-                    Plugin.LogSource.LogInfo("[MaydayCareer] 掉漆快照跳过：漆面还没初始化（paintInit=false），全零只是占位");
-                    return;
-                }
-
-                var pc = hs.paintCover;
-                if (pc != null) for (int i = 0; i < pc.Length; i++) s.paintCover.Add(pc[i]);
-
-                float min = 1f;
-                for (int i = 0; i < s.paintCover.Count; i++) if (s.paintCover[i] < min) min = s.paintCover[i];
-                Plugin.LogSource.LogInfo(string.Format(
-                    "[MaydayCareer] 掉漆快照 {0} 块，最低 {1:F2}：[{2}]",
-                    s.paintCover.Count, min,
-                    string.Join(", ", s.paintCover.ConvertAll(v => v.ToString("F2")).ToArray())));
-            }
-            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 掉漆快照失败: " + e.Message); }
+            try { return UnityEngine.Object.FindObjectOfType<global::Mayday.Systems.HullSystem>(); }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 找不到 HullSystem: " + e.Message); return null; }
         }
 
-        static void RestorePaint(CareerState s)
+        // serverReady 是机体系统的总开关。没就绪时 holes/damage 的 Count 会小于面板数，
+        // 这时候读到的全零只是占位 —— 硬写等于把好飞机写成残骸。
+        // 之前九轮探测失败就是没等这个标记：Count 从 11 涨到 12 是在补齐面板数，
+        // 不是"多了一个洞"。
+        static bool HullReady(global::Mayday.Systems.HullSystem hs, out int panels, out string why)
         {
-            if (!s.hasPaintField || s.paintCover.Count == 0)
+            panels = 0; why = "";
+            try
             {
-                Plugin.LogSource.LogInfo("[MaydayCareer] 掉漆还原跳过：存档没有掉漆数据");
+                if (hs == null) { why = "HullSystem 未就绪"; return false; }
+                if (!hs.serverReady) { why = "serverReady=false"; return false; }
+                int count = global::Mayday.Systems.HullSystem.Count;
+                if (hs.holes == null || hs.damage == null || hs.dirt == null) { why = "per-panel 列表为空"; return false; }
+                if (hs.holes.Count != count || hs.damage.Count != count || hs.dirt.Count != count)
+                {
+                    why = "面板数不匹配 holes=" + hs.holes.Count + " damage=" + hs.damage.Count
+                        + " dirt=" + hs.dirt.Count + " 应为 " + count;
+                    return false;
+                }
+                if (hs.sStage == null || hs.sProg == null || hs.sStage.Length != hs.sProg.Length)
+                { why = "区段维修数组不完整"; return false; }
+                panels = count;
+                return true;
+            }
+            catch (Exception e) { why = e.Message; return false; }
+        }
+
+        static void PutColor(List<float> dst, UnityEngine.Color32 c)
+        { dst.Add(c.r); dst.Add(c.g); dst.Add(c.b); dst.Add(c.a); }
+
+        static void PutColor(List<float> dst, UnityEngine.Color c)
+        { dst.Add(c.r); dst.Add(c.g); dst.Add(c.b); dst.Add(c.a); }
+
+        static UnityEngine.Color GetColor(List<float> v)
+        {
+            if (v == null || v.Count < 4) return new UnityEngine.Color(1f, 1f, 1f, 1f);
+            return new UnityEngine.Color(v[0], v[1], v[2], v[3]);
+        }
+
+        static UnityEngine.Color32 GetColor32(List<float> v)
+        {
+            var c = GetColor(v);
+            return new UnityEngine.Color32(
+                (byte)Math.Round(Math.Clamp(c.r, 0f, 1f) * 255f),
+                (byte)Math.Round(Math.Clamp(c.g, 0f, 1f) * 255f),
+                (byte)Math.Round(Math.Clamp(c.b, 0f, 1f) * 255f),
+                (byte)Math.Round(Math.Clamp(c.a, 0f, 1f) * 255f));
+        }
+
+        static void ReadHull(CareerState s)
+        {
+            s.hull = null;
+            try
+            {
+                var hs = FindHull();
+                if (!HullReady(hs, out int n, out string why))
+                { Plugin.LogSource.LogInfo("[MaydayCareer] 机体快照跳过：" + why); return; }
+
+                var rec = new CareerState.HullRec { breaches = hs.breaches };
+                try { rec.sectSync = hs.sectSync.ToString(); } catch { }
+
+                float now = UnityEngine.Time.time;
+                for (int i = 0; i < n; i++)
+                {
+                    var p = new CareerState.HullPanelRec();
+                    try { p.damage = hs.lDamage[i]; } catch { }
+                    try { p.netDamage = hs.damage[i]; } catch { }
+                    try { p.dirt = hs.lDirt[i]; } catch { }
+                    try { p.netDirt = hs.dirt[i]; } catch { }
+                    try
+                    {
+                        var v = hs.holes[i];
+                        p.hx = v.x; p.hy = v.y; p.hz = v.z; p.hr = v.w; p.hasHole = v.w > 0f;
+                    }
+                    catch { }
+                    try { p.patchT = hs.patchT[i]; } catch { }
+                    try
+                    {
+                        float last = hs.patchLast[i];
+                        if (last > 0f) { p.hasPatchAge = true; p.patchAge = Math.Max(0f, now - last); }
+                    }
+                    catch { }
+                    rec.panels.Add(p);
+                }
+
+                for (int j = 0; j < hs.sStage.Length; j++)
+                    rec.sections.Add(new CareerState.HullSectionRec { stage = hs.sStage[j], progress = hs.sProg[j] });
+
+                // 掉漆：paintInit/shownInit 都为 true、数组长度对上面板数，外观链才有效
+                bool paintReady = false;
+                try
+                {
+                    paintReady = hs.paintInit && hs.shownInit
+                        && hs.paintCover != null && hs.paintCover.Length == n
+                        && hs.shownMain != null && hs.shownMain.Length == n
+                        && hs.coverDamage != null && hs.coverDamage.Length == n;
+                }
+                catch { }
+
+                if (paintReady)
+                {
+                    int ok = 0;
+                    for (int i = 0; i < n; i++)
+                    {
+                        var q = new CareerState.HullPaintRec();
+                        bool good = true;
+                        try { PutColor(q.main, hs.mainColor[i]); } catch { good = false; }
+                        try { PutColor(q.accent, hs.accentColor[i]); } catch { good = false; }
+                        try { PutColor(q.netMain, hs.lMain[i]); } catch { good = false; }
+                        try { PutColor(q.netAccent, hs.lAccent[i]); } catch { good = false; }
+                        try { PutColor(q.shownMain, hs.shownMain[i]); } catch { good = false; }
+                        try { PutColor(q.shownAccent, hs.shownAccent[i]); } catch { good = false; }
+                        try { PutColor(q.goalMain, hs.goalMain[i]); } catch { good = false; }
+                        try { PutColor(q.goalAccent, hs.goalAccent[i]); } catch { good = false; }
+                        try { q.glideMain = hs.glideMain[i]; } catch { good = false; }
+                        try { q.glideAccent = hs.glideAccent[i]; } catch { good = false; }
+                        try { q.cover = hs.paintCover[i]; } catch { good = false; }
+                        try { q.coverDamage = hs.coverDamage[i]; } catch { good = false; }
+                        if (good) { rec.paint.Add(q); ok++; }
+                    }
+                    float minCover = 1f, maxCd = 0f;
+                    foreach (var q in rec.paint)
+                    {
+                        if (q.cover < minCover) minCover = q.cover;
+                        if (q.coverDamage > maxCd) maxCd = q.coverDamage;
+                    }
+                    Plugin.LogSource.LogInfo(string.Format(
+                        "[MaydayCareer] 掉漆快照 {0}/{1} 块 最低覆盖={2:F2} 最大掉漆={3:F2}",
+                        ok, n, minCover, maxCd));
+                }
+                else
+                {
+                    Plugin.LogSource.LogInfo("[MaydayCareer] 掉漆快照跳过：漆面外观还没初始化");
+                }
+
+                s.hull = rec;
+                float maxDmg = 0f;
+                foreach (var p in rec.panels) maxDmg = Math.Max(maxDmg, p.netDamage);
+                Plugin.LogSource.LogInfo(string.Format(
+                    "[MaydayCareer] 机体快照 {0} 块面板 breaches=0x{1:X4} 最大损伤={2:F2}",
+                    n, rec.breaches, maxDmg));
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 机体快照失败: " + e.Message); }
+        }
+
+        static DateTime _hullCheckAt;
+
+        static void RestoreHull(CareerState s)
+        {
+            if (s.hull == null || s.hull.panels.Count == 0)
+            {
+                Plugin.LogSource.LogInfo("[MaydayCareer] 机体还原跳过：存档没有机体数据（进机舱按 J 存一次即可记录）");
                 return;
             }
             try
             {
-                var hs = UnityEngine.Object.FindObjectOfType<global::Mayday.Systems.HullSystem>();
-                if (hs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] 掉漆还原跳过：HullSystem 未就绪"); return; }
+                var hs = FindHull();
+                if (!HullReady(hs, out int n, out string why))
+                { Plugin.LogSource.LogWarning("[MaydayCareer] 机体还原跳过：" + why); return; }
 
-                bool ready = false;
-                try { ready = hs.paintInit; } catch { }
-                if (!ready)
+                var rec = s.hull;
+
+                // 顺序对齐游戏自己的状态链，倒着写会被下一帧重算盖掉：
+                // 1) per-panel 损伤/脏污/洞/补丁 → 2) breaches → 3) 区段 →
+                // 4) 网络色+本地色 → 5) 外观链 shown*/goal*/glide*/cover →
+                // 6) shownInit=true → ApplyAllSectionPaint → MarkAllDirty
+                int np = Math.Min(n, rec.panels.Count);
+                float now = UnityEngine.Time.time;
+                int holesBack = 0;
+                bool holeWriteFailed = false;
+                for (int i = 0; i < np; i++)
                 {
-                    // 未初始化时数组是全零占位，硬写等于把好飞机写成整机掉漆
-                    Plugin.LogSource.LogWarning("[MaydayCareer] 掉漆还原跳过：漆面还没初始化，现在写会把好飞机写成掉漆");
-                    return;
+                    var p = rec.panels[i];
+                    try { hs.lDamage[i] = p.damage; } catch { }
+                    try { hs.damage[i] = p.netDamage; } catch { }
+                    try { hs.lDirt[i] = p.dirt; } catch { }
+                    try { hs.dirt[i] = p.netDirt; } catch { }
+                    try
+                    {
+                        hs.holes[i] = new UnityEngine.Vector4(p.hx, p.hy, p.hz, p.hr);
+                        if (p.hasHole) holesBack++;
+                    }
+                    catch (Exception he)
+                    {
+                        // SyncList<Vector4> 的索引器在个别 interop 版本下可能有 marshalling 问题。
+                        // 只报一次，别让它连累损伤和掉漆
+                        if (!holeWriteFailed)
+                        {
+                            holeWriteFailed = true;
+                            Plugin.LogSource.LogWarning("[MaydayCareer] 写 holes 失败（洞位可能不还原）: " + he.Message);
+                        }
+                    }
+                    try { hs.patchT[i] = p.patchT; } catch { }
+                    try { hs.patchLast[i] = p.hasPatchAge ? now - p.patchAge : 0f; } catch { }
                 }
 
-                var pc = hs.paintCover;
-                if (pc == null) { Plugin.LogSource.LogWarning("[MaydayCareer] 掉漆还原跳过：paintCover 为空"); return; }
+                try { hs.Networkbreaches = (ushort)rec.breaches; }
+                catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 写 breaches 失败: " + e.Message); }
 
-                int n = Math.Min(pc.Length, s.paintCover.Count), wrote = 0;
-                for (int i = 0; i < n; i++) { pc[i] = s.paintCover[i]; wrote++; }
-
-                // 数据写完还要让游戏把材质刷一遍，否则画面上看不出变化。
-                try
+                int ns = Math.Min(hs.sStage.Length, rec.sections.Count);
+                for (int j = 0; j < ns; j++)
                 {
-                    var mi = hs.GetType().GetMethod("TickPaint", System.Reflection.BindingFlags.Instance
-                        | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
-                    if (mi != null) mi.Invoke(hs, new object[] { 0.05f });
+                    try { hs.sStage[j] = (byte)rec.sections[j].stage; } catch { }
+                    try { hs.sProg[j] = rec.sections[j].progress; } catch { }
                 }
-                catch { }
+                try { hs.NetworksectSync = ulong.Parse(rec.sectSync ?? "0"); } catch { }
+
+                int paintOk = 0;
+                int nq = rec.paint.Count;
+                if (nq > 0)
+                {
+                    // 4) 网络色 + 本地色
+                    for (int i = 0; i < Math.Min(n, nq); i++)
+                    {
+                        var q = rec.paint[i];
+                        bool good = true;
+                        try { hs.mainColor[i] = GetColor32(q.main); } catch { good = false; }
+                        try { hs.accentColor[i] = GetColor32(q.accent); } catch { good = false; }
+                        try { hs.lMain[i] = GetColor(q.netMain); } catch { good = false; }
+                        try { hs.lAccent[i] = GetColor(q.netAccent); } catch { good = false; }
+                        if (good) paintOk++;
+                    }
+                    // 5) 外观链：shown* 才是渲染读的；cover/coverDamage 是掉漆量
+                    for (int i = 0; i < Math.Min(n, nq); i++)
+                    {
+                        var q = rec.paint[i];
+                        try { hs.shownMain[i] = GetColor(q.shownMain); } catch { }
+                        try { hs.shownAccent[i] = GetColor(q.shownAccent); } catch { }
+                        try { hs.goalMain[i] = GetColor(q.goalMain); } catch { }
+                        try { hs.goalAccent[i] = GetColor(q.goalAccent); } catch { }
+                        try { hs.glideMain[i] = q.glideMain; } catch { }
+                        try { hs.glideAccent[i] = q.glideAccent; } catch { }
+                        try { hs.paintCover[i] = q.cover; } catch { }
+                        try { hs.coverDamage[i] = q.coverDamage; } catch { }
+                    }
+                    try { hs.shownInit = true; } catch { }
+                }
+
+                // 6) 重绘：这才是让画面跟上的入口，TickPaint 只是每帧的颜色插值推进
+                bool repainted = InvokeHull(hs, "ApplyAllSectionPaint") && InvokeHull(hs, "MarkAllDirty");
 
                 Plugin.LogSource.LogInfo(string.Format(
-                    "[MaydayCareer] 掉漆还原 {0}/{1} 块（存档最低 {2:F2}）",
-                    wrote, pc.Length, MinOf(s.paintCover)));
+                    "[MaydayCareer] 机体还原 {0} 块面板（洞 {1} 处） breaches=0x{2:X4} 区段={3} 掉漆 {4}/{5} 块 重绘={6}",
+                    np, holesBack, rec.breaches, ns, paintOk, nq, repainted ? "已调用" : "失败"));
+
+                _hullCheckAt = DateTime.UtcNow.AddSeconds(3);
             }
-            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 掉漆还原失败: " + e.Message); }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 机体还原失败: " + e.Message); }
         }
 
-        static float MinOf(List<float> xs)
+        static bool InvokeHull(global::Mayday.Systems.HullSystem hs, string name)
         {
-            float m = 1f;
-            for (int i = 0; i < xs.Count; i++) if (xs[i] < m) m = xs[i];
-            return m;
+            try
+            {
+                var mi = hs.GetType().GetMethod(name, System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+                if (mi == null)
+                {
+                    Plugin.LogSource.LogWarning("[MaydayCareer] 找不到 HullSystem." + name + "（私有方法未生成托管桩）");
+                    return false;
+                }
+                mi.Invoke(hs, null);
+                return true;
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 调用 HullSystem." + name + " 失败: " + e.Message);
+                return false;
+            }
+        }
+
+        /// <summary>3 秒后回读损伤与掉漆 —— 写进去不算，留得住才算（燃油/发动机同一套规矩）。</summary>
+        public static void TickVerifyHull()
+        {
+            if (_hullCheckAt == default) return;
+            if (DateTime.UtcNow < _hullCheckAt) return;
+            _hullCheckAt = default;
+            try
+            {
+                var hs = FindHull();
+                if (hs == null) return;
+                float maxDmg = 0f, minCover = 1f;
+                int holes = 0;
+                try { for (int i = 0; i < hs.damage.Count; i++) maxDmg = Math.Max(maxDmg, hs.damage[i]); } catch { }
+                try { if (hs.paintCover != null) for (int i = 0; i < hs.paintCover.Length; i++) minCover = Math.Min(minCover, hs.paintCover[i]); } catch { }
+                try { for (int i = 0; i < hs.holes.Count; i++) if (hs.holes[i].w > 0f) holes++; } catch { }
+                Plugin.LogSource.LogInfo(string.Format(
+                    "[MaydayCareer] 机体校验（3 秒后）breaches=0x{0:X4} 最大损伤={1:F2} 洞={2} 最低覆盖={3:F2}",
+                    hs.breaches, maxDmg, holes, minCover));
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 机体校验失败: " + e.Message); }
         }
 
         // ---------- 燃油 ----------

@@ -30,15 +30,14 @@
 | 座位排数 | `PassengerDirector.rowMask` 位图 |
 | 燃油 | `FuelSystem.tank[]` 左右箱 + 储备油（**绝对升数**，不是比例） |
 | 发动机 | 每台的 `state` / `faults` / `rpm` / `cowl` / 机油量 |
-| 机翼掉漆 | `HullSystem.paintCover` |
+| 机体损伤 | `HullSystem` per-panel：每块面板的损伤/脏污/破洞/补丁进度 + 区段维修阶段（`sStage`/`sProg`） |
+| 机翼掉漆 | `shownMain/shownAccent` 外观链 + `paintCover`/`coverDamage`，写回后调 `ApplyAllSectionPaint` 重绘 |
 | 客舱器材 | 场景里实体物品的完整快照，按 socket 层级路径找回原位 |
 
 ### 不保存
 
 | 项 | 原因 |
 |---|---|
-| 机身破洞 | 洞的几何数据不通过托管层暴露：`holes`、`holes.objects`、`holePlaced`、`HoleOpen()`、`holeViews`、`breaches` 在洞明明存在时全部返回零或未激活 |
-| 分段受损（`jetHp`） | 是破洞的派生值。直接写当场可读、3 秒后被重算归零；改写成 `jetSync` / `sectSync` 位图再试，依然无效 |
 | 行李 / 手持物 / 炸弹 | 运行时临时对象，结算时游戏自己会清 |
 | 火焰、冒烟等特效 | 瞬时视觉，只还原"故障"这个事实 |
 
@@ -99,7 +98,7 @@ BepInEx\plugins\MaydayCareer.dll
 重新启动游戏。日志（`BepInEx\LogOutput.log`）里应该出现：
 
 ```
-[MaydayCareer] 已加载 v1.0.0
+[MaydayCareer] 已加载 v1.1.0
 [MaydayCareer] 存档路径 = C:\Users\<你>\AppData\LocalLow\Lyngo Games\Mayday Airways\career.json
 [MaydayCareer] 补丁数 = 8
 ```
@@ -173,7 +172,7 @@ BepInEx\config\local.mayday.career.cfg
 | `SaveItems` / `LoadItems` | `true` | 客舱器材的存 / 读 |
 | `SaveFuel` / `LoadFuel` | `true` | 燃油的存 / 读 |
 | `SaveEngine` / `LoadEngine` | `true` | 发动机的存 / 读 |
-| `SavePaint` / `LoadPaint` | `true` | 机翼掉漆的存 / 读 |
+| `SaveHull` / `LoadHull` | `true` | 机体损伤 + 掉漆的存 / 读（写入后 3 秒自动回读校验） |
 | `Verbose` | `true` | 打印导演机的每次阶段切换，排查用 |
 
 ### `[Debug]`
@@ -340,7 +339,8 @@ dotnet run Inspector.cs "C:\...\BepInEx\interop\Assembly-CSharp.dll" find "FuelL
 - 物品只存客舱 / 货舱里的**实体**，行李和手持物不存
 - 物品的 `tag` 只记录不还原 —— 那是运行时网络句柄，重新生成必然是新值
 - 发动机保证 `state` / `faults` 准确；机油量已验证能留住，温度等纯模拟量会在几秒内回归正常值
-- 机翼掉漆的数据能存能读，但**材质重绘不一定立刻生效**：读档后可能要先飞一段才看得出来。游戏逻辑（要不要补漆）按数据走，不受影响
+- 机翼掉漆走的是完整外观链（`shownMain/shownAccent` + `paintCover/coverDamage`），写回后调 `ApplyAllSectionPaint` + `MarkAllDirty` 重绘。若日志出现 `写 holes 失败`，说明当前 interop 版本对 `SyncList<Vector4>` 索引器支持有问题 —— 损伤与掉漆仍会还原，只是洞的位置可能不在原处
+- 机体状态有一道前置门：`HullSystem.serverReady` 且 `holes/damage/dirt` 的 Count 等于面板数。没就绪时读档会跳过机体部分（日志会说明原因），等一轮结算后再读即可
 - 多人时只有房主存读
 - 游戏更新后如果方法名或字段结构变化，需要重新编译
 
@@ -372,7 +372,11 @@ GroundCrew.ServerReanchor         站点重锚
 PassengerDirector.ServerResetForNewRun   座排自愈
 Mirror.NetworkManager.Update      热键轮询
 FuelSystem.tank / EngineUnit.lOil 燃油与发动机
-HullSystem.paintCover             机翼掉漆
+HullSystem.serverReady / .Count   机体快照的前置判据
+HullSystem.damage/dirt/holes      机体损伤（per-panel）
+HullSystem.shownMain/shownAccent  机翼掉漆（外观链）
+HullSystem.ApplyAllSectionPaint   掉漆重绘入口（私有，反射调用）
+HullSystem.MarkAllDirty           材质脏标记（私有，反射调用）
 ```
 
 任何一个改名都会让对应的功能静默失效（有 try/catch 兜底，不会崩游戏），日志里能看到。

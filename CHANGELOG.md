@@ -1,5 +1,26 @@
 # 更新记录
 
+## v1.1.0 — 机体损伤与机翼掉漆（翻案）
+
+之前判定"破洞读不到、损伤做不到"的结论**是错的**，起因是分析了一个社区存档模组（LS3213/Mayday-Mod-Manager 的 mayday-save 0.6.52，参考其文档与反编译产物学习字段映射，未复制代码）。真正的结构是：
+
+- `holes` / `damage` / `dirt` 是 **per-panel 列表**，`Count` 必须等于 `HullSystem.Count`。之前看到的 Count 11→12 是初始化在补齐面板数，被误读成"多了一个洞"
+- 前置判据是 `HullSystem.serverReady`，不是 `paintInit`
+- `breaches` / `jetSync` / `sectSync` 只是汇总位图，`jetHp` 是派生值 —— 之前写它们当然没用
+- 掉漆的视觉链是 `shownMain/shownAccent`（渲染读这个）+ `goalMain/goalAccent` + `glideMain/glideAccent` + `paintCover/coverDamage`；`paintCover` 只是覆盖度参数
+- 重绘入口是 **`ApplyAllSectionPaint()` + `MarkAllDirty()`**（私有方法，反射调用），之前调的 `TickPaint` 只是每帧颜色插值推进
+
+**新增**
+
+- `SaveHull` / `LoadHull`（替代 `SavePaint` / `LoadPaint`）：存读每块面板的损伤/脏污/破洞/补丁进度、区段维修阶段、喷漆与掉漆完整外观链
+- 读档后 3 秒自动回读校验（breaches / 最大损伤 / 洞数 / 最低覆盖）
+- `patchLast` 存 age 不存绝对时间，还原时按当前 `Time.time` 转回
+
+**已知边界**
+
+- `holes[i]` 的索引器写入如果失败（个别 interop 版本对 `SyncList<Vector4>` 的支持问题），洞的位置可能不还原，损伤与掉漆不受影响，日志会明确提示
+- `mainColor` 是 `SyncList<Color32>`，同样存在索引器风险，逐元素 try 包裹
+
 ## v1.0.0 — 首个正式版
 
 给《Mayday Airways》Demo 补的跨局进度存档，覆盖 10 类状态。

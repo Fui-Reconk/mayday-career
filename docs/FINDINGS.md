@@ -231,7 +231,51 @@ grep -aq -F -f /tmp/pat.bin MaydayCareer.dll
 
 （ASCII 标识符如类型名、方法名在 `#Strings` heap 里是 UTF-8，直接 `grep` 就行——这就是为什么"方法名查得到、中文查不到"。）
 
-## 机体损伤与机翼掉漆：查了九轮，最终整块放弃
+## 机体损伤与机翼掉漆（v1.1.0 翻案：之前的结论是错的）
+
+> 下面那节"查了九轮，最终整块放弃"的历史结论**已被推翻**，保留下来是为了记录错误推理的过程。
+> 翻案的依据是分析社区模组 mayday-save 0.6.52（LS3213/Mayday-Mod-Manager，MelonLoader + Il2CppInterop）。
+> 该仓库无 LICENSE，只学字段映射与调用顺序，未复制任何代码。
+
+**之前错在哪：**
+
+| 当时的判断 | 实际情况 |
+|---|---|
+| `holes.Count` 11→12 是"多了一个洞" | `holes` 是 per-panel 列表，Count 必须 == `HullSystem.Count`；11→12 是初始化在补齐面板数 |
+| 洞的数据"不在托管层" | 在：`holes[i]`（Vector4 位置+半径）、`damage[i]`/`lDamage[i]`、`dirt[i]`/`lDirt[i]`、`patchT[i]`/`patchLast[i]` |
+| `breaches`/`jetSync`/`sectSync` 是洞的数据 | 只是汇总位图；`jetHp` 是派生值。写位图当然无效 |
+| 掉漆 = `paintCover` | `paintCover` 只是覆盖度；渲染读 `shownMain/shownAccent`，还有 `goalMain/goalAccent`、`glideMain/glideAccent`、`coverDamage` |
+| 重绘 = `TickPaint` | 重绘 = `ApplyAllSectionPaint()` + `MarkAllDirty()`（私有，反射调用） |
+| 就绪判据 = `paintInit` | 就绪判据 = `serverReady` 且 `holes/damage/dirt` 的 Count == `HullSystem.Count` |
+
+**为什么九轮探测全失败：** 探测时机没等 `serverReady`，读到的都是初始化前的占位零；又把 `SyncList` Count 的增长误读成了洞的变化。教训：**探测一个系统的状态前，先找它的"就绪"标记**。
+
+**字段表（interop 全部确认存在）：**
+
+```
+per-panel：damage/dirt (SyncList<float>)、lDamage/lDirt/patchT/patchLast (float[])
+           holes (SyncList<Vector4>：x,y,z,半径)、sStage (byte[])、sProg (float[])
+汇总：     Networkbreaches (ushort)、NetworksectSync (ulong)
+掉漆：     mainColor/accentColor (SyncList<Color32>)、lMain/lAccent (Color[])、
+           shownMain/shownAccent/goalMain/goalAccent (Color[])、glideMain/glideAccent (float[])、
+           paintCover/coverDamage (float[])
+方法：     ApplyAllSectionPaint()（private）、MarkAllDirty()（private）
+常量：     HullSystem.Count（面板数）、HullSystem.StagePaint（区段维修的喷漆阶段）
+判据：     serverReady、paintInit+shownInit（掉漆链）
+```
+
+**还原顺序（顺序错了会被下一帧重算盖掉）：**
+
+```
+1. lDamage/damage、lDirt/dirt、holes[i]、patchT/patchLast（逐面板）
+2. Networkbreaches
+3. sStage/sProg → NetworksectSync
+4. mainColor/accentColor → lMain/lAccent
+5. shown*/goal*/glide*/paintCover/coverDamage → shownInit = true
+6. ApplyAllSectionPaint() → MarkAllDirty()
+```
+
+## 【历史，已推翻】机体损伤与机翼掉漆：查了九轮，最终整块放弃
 
 结论先写在最前面：**机体损伤（破洞 / 分段）和机翼掉漆在 v1.0.0 里都不保存**，代码也删干净了。下面是把这条路走死的过程，留给以后想接着挖的人。
 

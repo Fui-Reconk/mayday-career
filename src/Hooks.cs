@@ -221,6 +221,7 @@ namespace MaydayCareer
             Hotkey.Poll();
             CareerStore.TickVerify();
             CareerStore.TickVerifyEngines();
+            CareerStore.TickVerifyHull();
         }
     }
 }
