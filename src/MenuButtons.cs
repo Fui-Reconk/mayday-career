@@ -98,7 +98,7 @@ namespace MaydayCareer
                 CloneButton(anchor, parent, LoadBtnName, "读档", OnLoadClicked, false, -1, null, 1);
             }
 
-            Plugin.LogSource.LogInfo("[MaydayCareer] 暂停菜单按钮已注入（存盘/读档）");
+            Plugin.LogSource.LogInfo("[MaydayCareer] 暂停菜单按钮已注入（存盘/读档 → 选档界面）");
         }
 
         /// <summary>可视最底部的原按钮（排除我们的克隆）。比较用世界坐标，锚点差异不影响。</summary>
@@ -158,7 +158,7 @@ namespace MaydayCareer
         ///   siblingIndex >= 0 —— LayoutGroup 容器，克隆后插到该序号；
         ///   siblingIndex < 0  —— 手动锚定，按 bottom 基准 + slot 从下往上叠。
         /// </summary>
-        static void CloneButton(
+        static global::Mayday.UI.UIButton CloneButton(
             global::Mayday.UI.UIButton anchor,
             UnityEngine.Transform parent,
             string name,
@@ -177,7 +177,7 @@ namespace MaydayCareer
             {
                 Plugin.LogSource.LogWarning("[MaydayCareer] 克隆按钮 " + name + " 上没有 UIButton，丢弃");
                 UnityEngine.Object.Destroy(go);
-                return;
+                return null;
             }
 
             // 改文案。UIText 的 key 是本地化键 —— 克隆会带上原按钮的 key，
@@ -242,51 +242,25 @@ namespace MaydayCareer
             // 挂回调。委托目标都是静态方法，不会被 GC。
             btn.onClick = Il2CppInterop.Runtime.DelegateSupport.ConvertDelegate<Il2CppSystem.Action>(
                 new System.Action(callback));
+            return btn;
         }
 
         // ---------- 按钮动作 ----------
 
         static void OnSaveClicked()
         {
-            try
-            {
-                string reason = CareerStore.SaveManual();
-                if (reason == null)
-                {
-                    var gs = global::Mayday.GameState.Instance;
-                    Toast(gs != null
-                        ? "已存盘：第" + gs.Leg + "段 · " + gs.Money + " 块"
-                        : "已存盘", global::Mayday.NotifyKind.Good);
-                }
-                else
-                {
-                    // 被守卫拦下（新公司/非房主等）—— 如实告知，别让玩家以为存上了
-                    Toast(reason, global::Mayday.NotifyKind.Warning);
-                }
-            }
-            catch (Exception e)
-            {
-                Plugin.LogSource.LogError("[MaydayCareer] 菜单存盘异常: " + e);
-                Toast("存盘失败，详见日志", global::Mayday.NotifyKind.Danger);
-            }
+            try { SaveLoadScreen.Open(true); }
+            catch (Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 打开存档界面异常: " + e); }
         }
 
         static void OnLoadClicked()
         {
-            try
-            {
-                CareerStore.ApplyForce();
-                Toast("已读档", global::Mayday.NotifyKind.Good);
-            }
-            catch (Exception e)
-            {
-                Plugin.LogSource.LogError("[MaydayCareer] 菜单读档异常: " + e);
-                Toast("读档失败，详见日志", global::Mayday.NotifyKind.Danger);
-            }
+            try { SaveLoadScreen.Open(false); }
+            catch (Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 打开读档界面异常: " + e); }
         }
 
-        /// <summary>游戏自带的通知条（右上角 toast）。</summary>
-        static void Toast(string msg, global::Mayday.NotifyKind kind)
+        /// <summary>游戏自带的通知条（右上角 toast）。选档界面也用它反馈结果。</summary>
+        public static void Toast(string msg, global::Mayday.NotifyKind kind)
         {
             try
             {

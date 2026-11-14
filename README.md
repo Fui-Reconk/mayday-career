@@ -171,7 +171,9 @@ BepInEx\config\local.mayday.career.cfg
 | `LoadKey` | `F9` | 读档热键 |
 | `SaveKey` | `J` | 存盘热键 |
 | `GuardSave` | `true` | 存盘回退保护：当前局比存档更早时拒绝写盘 |
-| `MenuButtons` | `true` | 暂停菜单（ESC）里显示「存盘 / 读档」按钮 |
+| `MenuButtons` | `true` | 暂停菜单（ESC）里显示「存盘 / 读档」按钮，点击弹出选档界面 |
+| `SaveSlots` | `3` | 存档档位数（1-6）。档1 = 主档 `career.json`；档2+ = `career.slotN.json` |
+| `ActiveSlot` | `1` | 上次使用的档位（选档界面点行时自动写回，一般不用手改） |
 | `PerfWatch` | `true` | 帧监测：出现卡顿时在日志里汇总卡顿帧数、当时阶段与插件自身耗时，用于区分"游戏卡"还是"插件卡" |
 | `ClearBeforeLoad` | `false` | 读档后钱变成两倍时改成 `true` |
 | `SaveItems` / `LoadItems` | `true` | 客舱器材的存 / 读 |

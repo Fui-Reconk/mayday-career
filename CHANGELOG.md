@@ -1,23 +1,45 @@
 # 更新记录
 
-## v1.3.0 — 暂停菜单存盘/读档按钮
+## v1.3.0 — 暂停菜单按钮 + galgame 式多档位存读
 
-暂停菜单（ESC）里新增「存盘 / 读档」两个按钮，效果与热键一致，样式与游戏原按钮一致。
+暂停菜单（ESC）里新增「存盘 / 读档」两个按钮（样式与游戏原按钮一致），
+点击后弹出 **galgame 式选档界面**：
+
+- 列出档 1..SaveSlots，每行显示该档的存档时间 / 段数 / 金钱（空档标注）
+- 存盘模式点行 = 把当前进度写入该档（GuardSave 照常生效，被拦时黄色提示）
+- 读档模式点行 = 把该档读入当前进度
+- 底部「关闭」或点击四周暗幕关闭；结果用游戏自带通知条反馈
+
+**多档位存储**：档 1 = 主档 `career.json`（完全兼容旧档与热键流程）；
+档 2+ 各自是独立文件 `career.slotN.json`（备份同理 `career.slotN.bak.json`）。
+热键与自动存盘也作用于"当前档位"（即选档界面最后点的那一档，
+选择持久化在配置 `ActiveSlot`）。GuardSave 的段数回退保护按档位各自缓存。
 
 **实现**
 
-- Harmony postfix 挂 `PauseScreen.Build()`，把游戏的 `resumeBtn` 整个 GameObject
-  克隆两份 —— 字体、底色、hover 动画、点击音效全部复用原按钮，
-  不碰游戏的 UITheme/UISprites 资源
-- 文案写入前清掉本地化键（`UIText.key`），同时写死 `current`/`shown` 状态字段，
+- 按钮侧：Harmony postfix 挂 `PauseScreen.Build()`，克隆游戏的 `resumeBtn`
+  两份 —— 字体、底色、hover 动画、点击音效全部复用原按钮；
+  插到可视最底部原按钮（退出）正上方，「退出」保持最底
+- 选档界面：IL2CPP 下不能自定义 MonoBehaviour，整棵 UI 树用现成组件拼出
+  （Canvas/CanvasScaler/GraphicRaycaster/Image/Button/Text）；
+  文字用系统字体微软雅黑（`Font.CreateDynamicFontFromOSFont`），
+  中文渲染零风险；独立 Canvas（sortOrder 3000）悬浮于游戏 UI 之上，
+  不参与游戏的 UIScreen 栈
+- 行点击回调经 `DelegateSupport` 封送成 UnityAction 挂 uGUI Button.onClick；
+  暂停菜单按钮回调同理（`Il2CppSystem.Action`）
+- 文案写入前清本地化键（`UIText.key`），并写死 `current`/`shown` 状态字段，
   防止屏幕未激活时 Awake 用克隆来的旧文案覆盖
-- 回调经 `DelegateSupport` 封送成 `Il2CppSystem.Action` 赋给 `UIButton.onClick`
-  （单播字段整体赋值，目标为静态方法，无 GC 风险）
-- 父容器有 LayoutGroup 就交给布局排位；没有就按原按钮高度手动下移
-- 点击反馈走游戏自带的通知条（`NotificationFeed.Push`）：存盘显示"第X段 · Y 块"，
-  失败显示红色提示
+- 父容器无 LayoutGroup 时按世界坐标排位（不受各按钮锚点差异影响）；
+  注入时把容器子物体清单打进日志，排位不满意可照单精确调
 
-**新配置**：`MenuButtons`（默认 `true`），关掉即回到纯热键模式。
+**新配置**：`MenuButtons`（默认 `true`）、`SaveSlots`（默认 3，1-6）、
+`ActiveSlot`（上次档位，自动写回）。
+
+**已知边界**
+
+- 选档界面的字体是系统微软雅黑，与游戏自绘 SDF 字体风格略有差异
+- 若「暂停菜单父容器无 LayoutGroup」日志出现，说明排位走了世界坐标兜底，
+  位置不满意时把日志里的容器清单发 issue
 
 ## v1.2.0 — 性能优化与帧监测
 
