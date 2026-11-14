@@ -936,6 +936,12 @@ namespace MaydayCareer
             if (gs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] GameState 为空，无法读档"); return; }
             _savedLeg = s.leg;
 
+            // 读档前的会话机场。若与存档机场不同，改完 CurrentAirport 游戏
+            // 会重建世界（ServerResetForNewRun + 站点重锚），刚还原的物品会被
+            // 清掉 —— 物品还原必须等重建完的重锚信号后再来一次（见 _restoreWaitRebuild）。
+            int airportBefore = -1;
+            try { airportBefore = gs.CurrentAirport; } catch { }
+
             Plugin.LogSource.LogInfo("[MaydayCareer] 本次读的是"
                 + (slot == AutoSlot ? "自动存档（" + FileFor(AutoSlot) + "）" : "档" + slot + "（" + Path.GetFileName(FileFor(slot)) + "）"));
 
@@ -968,6 +974,40 @@ namespace MaydayCareer
             {
                 if (!gs.HasUpgrade(id)) { gs.ServerAddUpgrade(id); added++; }
             }
+
+            // 升级回退：本局多买、存档里没有的 → 从台账移除（倒序防索引位移）。
+            // 之前只加不减，"已有升级不会回退"（用户反馈）。台账回退后，
+            // 升级的实物（咖啡机等）由物品精确还原清掉；座排无卸载 API，暂不回退。
+            int removedUpg = 0;
+            try
+            {
+                var list = gs.Upgrades;
+                if (list != null)
+                {
+                    for (int i = list.Count - 1; i >= 0; i--)
+                    {
+                        string owned = null;
+                        try { owned = list[i]?.ToString(); } catch { }
+                        if (string.IsNullOrEmpty(owned)) continue;
+                        if (!s.upgrades.Contains(owned))
+                        {
+                            try { list.RemoveAt(i); removedUpg++; }
+                            catch (Exception e)
+                            {
+                                Plugin.LogSource.LogWarning("[MaydayCareer] 移除升级 " + owned + " 失败: " + e.Message);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 升级回退失败: " + e.Message); }
+            if (removedUpg > 0)
+                Plugin.LogSource.LogInfo("[MaydayCareer] 升级回退：移除 " + removedUpg + " 项（存档里没有）");
+
+            _restoreWaitRebuild = airportBefore >= 0 && airportBefore != s.currentAirport;
+            if (_restoreWaitRebuild)
+                Plugin.LogSource.LogInfo("[MaydayCareer] 存档机场（机场" + s.currentAirport
+                    + "）与会话机场（机场" + airportBefore + "）不同：物品还原会等世界重建完成后再做一次");
 
             // 进度字段：都是 SyncVar 属性，直接写会标脏并同步给客户端。
             // 逐个 try，某个失败不影响其他字段。
@@ -2307,11 +2347,17 @@ namespace MaydayCareer
 
         // ---------- 世界物品：读 ----------
 
-        const int MaxRestoreTries = 3;
+        const int MaxRestoreTries = 5;
 
         static List<ItemRecord> _pendingItems;
         static bool _restorePending;
         static int _restoreTries;
+
+        // 读档机场与会话机场不同时置 true：改 CurrentAirport 会触发游戏重建世界
+        // （ServerResetForNewRun + 站点重锚），第一次还原的物品必被清掉。
+        // 置 true 期间"成功"不清 _restorePending，等重建完的 ServerReanchor
+        // 再还原一次到新世界里（OnSiteReanchored 会把本标记复位）。
+        static bool _restoreWaitRebuild;
 
         /// <summary>
         /// 读档后立刻尝试补物品；同时把"待补"标记挂上，
@@ -2349,6 +2395,9 @@ namespace MaydayCareer
         {
             if (!_restorePending) return;
             if (_restoreTries >= MaxRestoreTries) return;
+            // 重锚 = 世界重建（含读档机场切换触发的重建）已完成。
+            // 这次还原落在最终世界里，成功即可收尾。
+            _restoreWaitRebuild = false;
             RestoreItems(_pendingItems);
         }
 
@@ -2420,8 +2469,16 @@ namespace MaydayCareer
                     "[MaydayCareer] 物品重建 成功 {0} / 目标 {1}，socket 未命中 {2}（生成失败 {3}，第 {4} 次）",
                     ok, want.Count, socketMiss, spawnFail, _restoreTries));
 
-                // 全齐了就不再重试；否则留给下一次 GroundCrew 重锚再补
-                if (ok >= want.Count) _restorePending = false;
+                // 全齐了才考虑不再重试；否则留给下一次 GroundCrew 重锚再补。
+                // 但存档机场 ≠ 会话机场时，这次还原注定会被世界重建清掉 ——
+                // 保持 _restorePending，等重建完的 ServerReanchor 再还原一次。
+                if (ok >= want.Count)
+                {
+                    if (_restoreWaitRebuild)
+                        Plugin.LogSource.LogInfo("[MaydayCareer] 物品已还原，但世界即将按存档机场重建 —— 等重锚后再还原一次");
+                    else
+                        _restorePending = false;
+                }
             }
             catch (Exception e)
             {
