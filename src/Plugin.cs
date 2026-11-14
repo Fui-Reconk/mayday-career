@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "1.3.2";
+        public const string Version = "1.3.3";
 
         internal static ManualLogSource LogSource;
         internal static BepInEx.Configuration.ConfigFile ConfigRef; // 运行时写档位选择后 Save 用
@@ -213,6 +213,7 @@ namespace MaydayCareer
             harmony.PatchAll(typeof(Plugin).Assembly);
 
             LogSource.LogInfo("[MaydayCareer] 补丁数 = " + harmony.GetPatchedMethods().Count());
+            ConsoleGuard.DisableQuickEdit(); // 点日志窗口不再卡死游戏（QuickEdit 会阻塞控制台写入）
             CareerStore.Init();
             CareerStore.SetActiveSlot(ActiveSlot.Value); // 恢复上次使用的档位
             global::MaydayCareer.PerfWatch.Configure(PerfWatch.Value);
