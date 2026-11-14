@@ -85,6 +85,12 @@ namespace MaydayCareer
         // 无论游戏输入轮询和插件轮询谁先跑（见 EscapeHook.ShouldBlockGameBack）
         static int _lastCloseFrame = -1;
 
+        // 自研滚动状态：content 位移、可视高、可滚距离、滚动条把手视觉
+        static float _scrollOffset;
+        static float _viewportH, _contentH, _maxScroll, _sbHandleH;
+        static UnityEngine.RectTransform _contentRect;
+        static UnityEngine.RectTransform _sbHandle;
+
         sealed class Row
         {
             public GameObject go;
@@ -104,7 +110,7 @@ namespace MaydayCareer
             }
         }
 
-        /// <summary>每帧轮询：界面开着时按 ESC = 关界面（游戏侧被 EscapeHook 拦住，不会动菜单）。</summary>
+        /// <summary>每帧轮询：ESC 关界面；滚轮滚行区（自研滚动，不依赖 ScrollRect）。</summary>
         public static void PollEsc()
         {
             if (!IsOpen) return;
@@ -112,6 +118,52 @@ namespace MaydayCareer
             {
                 var kb = UnityEngine.InputSystem.Keyboard.current;
                 if (kb != null && kb.escapeKey.wasPressedThisFrame) Close();
+            }
+            catch { }
+            try
+            {
+                var mouse = UnityEngine.InputSystem.Mouse.current;
+                if (mouse != null)
+                {
+                    Vector2 delta = mouse.scroll.ReadValue();
+                    if (delta.y != 0f) ScrollBy(-delta.y * 0.4f);
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>滚动行区：位移钳制在 [0, 最大可滚距离]，同步行可见性（虚拟化裁剪）与滚动条把手。</summary>
+        static void ScrollBy(float delta)
+        {
+            if (_maxScroll <= 0f) return;
+            _scrollOffset = Math.Max(0f, Math.Min(_maxScroll, _scrollOffset + delta));
+            ApplyScroll();
+        }
+
+        static void ApplyScroll()
+        {
+            if (_contentRect == null) return;
+            try
+            {
+                _scrollOffset = Math.Max(0f, Math.Min(_maxScroll, _scrollOffset));
+                _contentRect.anchoredPosition = new Vector2(0f, _scrollOffset);
+
+                // 虚拟化裁剪：视口外的行直接隐藏（没有 RectMask2D 也不会溢出面板）
+                for (int i = 0; i < _rows.Count; i++)
+                {
+                    if (!_rows[i].go.activeSelf) continue; // 档位数收缩隐藏的行不碰
+                    float top = _scrollOffset - i * RowStep;
+                    bool vis = top > -RowH && top < _viewportH + RowH;
+                    if (_rows[i].go.activeSelf != vis) _rows[i].go.SetActive(vis);
+                }
+
+                // 滚动条把手：纯视觉，位置按滚动进度手算
+                if (_sbHandle != null && _maxScroll > 0f)
+                {
+                    float progress = _scrollOffset / _maxScroll;
+                    float travel = _viewportH - _sbHandleH;
+                    _sbHandle.anchoredPosition = new Vector2(0f, -(_viewportH / 2f - _sbHandleH / 2f) + (1f - progress) * travel);
+                }
             }
             catch { }
         }
@@ -137,6 +189,8 @@ namespace MaydayCareer
                     _rows[i].go.SetActive(active);
                     if (active) FillRow(_rows[i], i, saveMode);
                 }
+                _scrollOffset = 0f;
+                ApplyScroll(); // 回到顶部 + 刷新行可见性
                 _root.SetActive(true);
                 Plugin.LogSource.LogInfo("[MaydayCareer] 打开" + (saveMode ? "存" : "读") + "档选档界面（自动 + " + slots + " 手动档）");
             }
@@ -288,153 +342,86 @@ namespace MaydayCareer
             srt.anchoredPosition = new Vector2(0f, panelH / 2f - 103f);
             srt.sizeDelta = new Vector2(940f, 30f);
 
-            // 行滚动区：Viewport（RectMask2D 裁剪）+ ScrollRect。
-            // 分段容错：滚动三件套（RectMask2D/ScrollRect/Scrollbar）任何一个
-            // interop 异常都只降级"不能滚"，绝不炸掉整个构建
-            //（上一版在这里 NRE，选档界面打不开 —— 用户反馈"崩了"）。
+            // 行滚动区：自研滚动 —— 不用 RectMask2D/ScrollRect/Scrollbar
+            //（实测这游戏的 interop 对它们不可靠，AddComponent 直接 NRE）。
+            // 滚动 = 滚轮驱动 content 位移 + 视口外的行隐藏（虚拟化裁剪）+
+            // 纯视觉滚动条（两张 Image，把手位置手算）。全是验证过的基础组件。
             float viewportH = panelH - 240f; // 上下留出标题区和关闭按钮区
             int n = manual + 1;
             float contentH = n * RowH + (n - 1) * RowGap;
+            _viewportH = viewportH;
+            _contentH = contentH;
+            _maxScroll = Math.Max(0f, contentH - viewportH);
+            _scrollOffset = 0f;
 
-            ScrollRect scroll = null;
-            UnityEngine.RectTransform crt = null;
+            var viewport = NewImage(panel.transform, "Viewport", new Color(0f, 0f, 0f, 0f));
+            var vrt = viewport.transform.TryCast<UnityEngine.RectTransform>();
+            vrt.sizeDelta = new Vector2(880f, viewportH);
+            vrt.anchoredPosition = Vector2.zero; // 居中（不再给滚动条留偏移）
 
+            var content = new GameObject("Content");
+            content.transform.SetParent(viewport.transform, false);
+            _contentRect = content.transform.TryCast<UnityEngine.RectTransform>();
+            _contentRect.anchorMin = new Vector2(0f, 1f);   // 顶部锚定，向下生长
+            _contentRect.anchorMax = new Vector2(1f, 1f);
+            _contentRect.pivot = new Vector2(0.5f, 1f);
+
+            // 档位行：行 0 = 自动存档，行 1..N = 手动档位（手动坐标，久经考验）
+            _builtRows = n;
+            for (int i = 0; i < n; i++)
+            {
+                int slot = i; // 闭包捕获：行号即档位号（0 = 自动存档）
+                var rowGo = NewImage(content.transform, slot == CareerStore.AutoSlot ? "SlotAuto" : "Slot" + slot, new Color(0.20f, 0.23f, 0.31f, 1f));
+                var rrt = rowGo.transform.TryCast<UnityEngine.RectTransform>();
+                rrt.anchorMin = new Vector2(0.5f, 1f);
+                rrt.anchorMax = new Vector2(0.5f, 1f);
+                rrt.pivot = new Vector2(0.5f, 1f);
+                rrt.sizeDelta = new Vector2(880f, RowH);
+                rrt.anchoredPosition = new Vector2(0f, -(RowH / 2f + i * RowStep));
+
+                var btn = rowGo.AddComponent<Button>();
+                btn.targetGraphic = rowGo.GetComponent<Image>();
+                btn.colors = new ColorBlock
+                {
+                    normalColor = new Color(0.20f, 0.23f, 0.31f, 1f),
+                    highlightedColor = new Color(0.27f, 0.31f, 0.42f, 1f),
+                    pressedColor = new Color(0.16f, 0.18f, 0.25f, 1f),
+                    selectedColor = new Color(0.20f, 0.23f, 0.31f, 1f),
+                    disabledColor = new Color(0.15f, 0.15f, 0.15f, 1f),
+                    colorMultiplier = 1f,
+                    fadeDuration = 0.08f,
+                };
+
+                var label = NewText(rowGo.transform, "Label", "", font, 30, new Color(0.92f, 0.94f, 0.98f, 1f));
+                Stretch(label.transform.TryCast<UnityEngine.RectTransform>());
+                label.alignment = TextAnchor.MiddleCenter;
+
+                var row = new Row { go = rowGo, label = label, button = btn };
+                btn.onClick.AddListener(Wrap(delegate { OnRowClicked(slot); }));
+                _rows.Add(row);
+            }
+            Plugin.LogSource.LogInfo("[MaydayCareer] 构建选档界面: rows ok（" + _rows.Count + " 行，可视高 " + viewportH.ToString("F0") + "）");
+
+            // 滚动条：纯视觉（轨道 + 把手两张 Image），位置在 ApplyScroll 里手算。
+            // 行数放不下滚动区时隐藏。
             try
             {
-                var viewport = NewImage(panel.transform, "Viewport", new Color(0f, 0f, 0f, 0f));
-                var vrt = viewport.transform.TryCast<UnityEngine.RectTransform>();
-                vrt.sizeDelta = new Vector2(860f, viewportH);
-                vrt.anchoredPosition = new Vector2(-16f, 0f); // 右侧留滚动条位置
-                viewport.AddComponent<RectMask2D>();
-
-                var content = new GameObject("Content");
-                content.transform.SetParent(viewport.transform, false);
-                crt = content.transform.TryCast<UnityEngine.RectTransform>();
-                crt.anchorMin = new Vector2(0f, 1f);   // 顶部锚定，向下生长
-                crt.anchorMax = new Vector2(1f, 1f);
-                crt.pivot = new Vector2(0.5f, 1f);
-                crt.sizeDelta = new Vector2(0f, contentH); // 宽随 viewport，高按行数
-
-                try
-                {
-                    scroll = viewport.AddComponent<ScrollRect>();
-                    scroll.horizontal = false;
-                    scroll.vertical = true;
-                    scroll.movementType = ScrollRect.MovementType.Clamped;
-                    scroll.scrollSensitivity = 24f;
-                    scroll.content = crt;
-                }
-                catch (Exception e)
-                {
-                    scroll = null; // 降级：不能滚，但行还看得见（前几行）
-                    Plugin.LogSource.LogWarning("[MaydayCareer] 滚动初始化失败（界面仍可用，仅无滚动）: " + e.Message);
-                }
-
-                Plugin.LogSource.LogInfo("[MaydayCareer] 构建选档界面: viewport/scroll ok（滚动=" + (scroll != null ? "可用" : "降级") + "）");
-
-                // 档位行：行 0 = 自动存档，行 1..N = 手动档位。
-                // 手动坐标排布（顶部锚定向下）—— 之前试过布局组，interop 下不可靠。
-                for (int i = 0; i < n; i++)
-                {
-                    try
-                    {
-                        int slot = i; // 闭包捕获：行号即档位号（0 = 自动存档）
-                        var rowGo = NewImage(content.transform, slot == CareerStore.AutoSlot ? "SlotAuto" : "Slot" + slot, new Color(0.20f, 0.23f, 0.31f, 1f));
-                        var rrt = rowGo.transform.TryCast<UnityEngine.RectTransform>();
-                        rrt.anchorMin = new Vector2(0.5f, 1f);
-                        rrt.anchorMax = new Vector2(0.5f, 1f);
-                        rrt.pivot = new Vector2(0.5f, 1f);
-                        rrt.sizeDelta = new Vector2(860f, RowH);
-                        rrt.anchoredPosition = new Vector2(0f, -(RowH / 2f + i * RowStep));
-
-                        var btn = rowGo.AddComponent<Button>();
-                        btn.targetGraphic = rowGo.GetComponent<Image>();
-                        btn.colors = new ColorBlock
-                        {
-                            normalColor = new Color(0.20f, 0.23f, 0.31f, 1f),
-                            highlightedColor = new Color(0.27f, 0.31f, 0.42f, 1f),
-                            pressedColor = new Color(0.16f, 0.18f, 0.25f, 1f),
-                            selectedColor = new Color(0.20f, 0.23f, 0.31f, 1f),
-                            disabledColor = new Color(0.15f, 0.15f, 0.15f, 1f),
-                            colorMultiplier = 1f,
-                            fadeDuration = 0.08f,
-                        };
-
-                        var label = NewText(rowGo.transform, "Label", "", font, 30, new Color(0.92f, 0.94f, 0.98f, 1f));
-                        Stretch(label.transform.TryCast<UnityEngine.RectTransform>());
-                        label.alignment = TextAnchor.MiddleCenter;
-
-                        var row = new Row { go = rowGo, label = label, button = btn };
-                        btn.onClick.AddListener(Wrap(delegate { OnRowClicked(slot); }));
-                        _rows.Add(row);
-                    }
-                    catch (Exception e)
-                    {
-                        Plugin.LogSource.LogError("[MaydayCareer] 构建第 " + i + " 行失败: " + e);
-                    }
-                }
-                Plugin.LogSource.LogInfo("[MaydayCareer] 构建选档界面: rows ok（" + _rows.Count + " 行）");
+                var track = NewImage(panel.transform, "ScrollbarTrack", new Color(0.25f, 0.28f, 0.35f, 0.9f));
+                var trt2 = track.transform.TryCast<UnityEngine.RectTransform>();
+                trt2.sizeDelta = new Vector2(14f, viewportH);
+                trt2.anchoredPosition = new Vector2(490f - 24f, 0f);
+                var handle = NewImage(track.transform, "Handle", new Color(0.55f, 0.60f, 0.70f, 1f));
+                _sbHandle = handle.transform.TryCast<UnityEngine.RectTransform>();
+                _sbHandle.anchorMin = new Vector2(0f, 0f);
+                _sbHandle.anchorMax = new Vector2(1f, 0f);
+                _sbHandle.pivot = new Vector2(0.5f, 0.5f);
+                _sbHandleH = Math.Max(40f, viewportH * viewportH / Math.Max(1f, contentH));
+                _sbHandle.sizeDelta = new Vector2(0f, _sbHandleH);
+                track.SetActive(_maxScroll > 0f);
             }
             catch (Exception e)
             {
-                // viewport 层失败：退回最朴素的形式 —— 行直接挂在面板下，至少能用
-                Plugin.LogSource.LogError("[MaydayCareer] 滚动区构建失败，降级为无滚动: " + e);
-                crt = null;
-                for (int i = 0; i < n; i++)
-                {
-                    try
-                    {
-                        int slot = i;
-                        var rowGo = NewImage(panel.transform, slot == CareerStore.AutoSlot ? "SlotAuto" : "Slot" + slot, new Color(0.20f, 0.23f, 0.31f, 1f));
-                        var rrt = rowGo.transform.TryCast<UnityEngine.RectTransform>();
-                        rrt.sizeDelta = new Vector2(860f, RowH);
-                        rrt.anchoredPosition = new Vector2(-16f, panelH / 2f - 180f - i * RowStep);
-
-                        var btn = rowGo.AddComponent<Button>();
-                        btn.targetGraphic = rowGo.GetComponent<Image>();
-                        var label = NewText(rowGo.transform, "Label", "", font, 30, new Color(0.92f, 0.94f, 0.98f, 1f));
-                        Stretch(label.transform.TryCast<UnityEngine.RectTransform>());
-                        label.alignment = TextAnchor.MiddleCenter;
-                        var row = new Row { go = rowGo, label = label, button = btn };
-                        btn.onClick.AddListener(Wrap(delegate { OnRowClicked(slot); }));
-                        _rows.Add(row);
-                    }
-                    catch (Exception e2)
-                    {
-                        Plugin.LogSource.LogError("[MaydayCareer] 降级构建第 " + i + " 行也失败: " + e2);
-                    }
-                }
-                _builtRows = _rows.Count;
-                Plugin.LogSource.LogInfo("[MaydayCareer] 构建选档界面: 降级 rows ok（" + _rows.Count + " 行）");
-            }
-
-            // 滚动条（视觉件）：面板右缘，竖向。失败只影响观感
-            try
-            {
-                if (scroll != null)
-                {
-                    var sbGo = NewImage(panel.transform, "Scrollbar", new Color(0.25f, 0.28f, 0.35f, 0.9f));
-                    var sbrt = sbGo.transform.TryCast<UnityEngine.RectTransform>();
-                    sbrt.sizeDelta = new Vector2(14f, viewportH);
-                    sbrt.anchoredPosition = new Vector2(490f - 24f, 0f);
-                    var sb = sbGo.AddComponent<Scrollbar>();
-                    sb.direction = Scrollbar.Direction.BottomToTop;
-                    var handleGo = NewImage(sbGo.transform, "Handle", new Color(0.55f, 0.60f, 0.70f, 1f));
-                    var hrt = handleGo.transform.TryCast<UnityEngine.RectTransform>();
-                    hrt.anchorMin = new Vector2(0f, 0f);
-                    hrt.anchorMax = new Vector2(1f, 0f);
-                    hrt.pivot = new Vector2(0.5f, 0.5f);
-                    sb.handleRect = hrt;
-                    sb.targetGraphic = handleGo.GetComponent<Image>();
-                    scroll.verticalScrollbar = sb;
-                    scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
-                    scroll.verticalScrollbarSpacing = 3f;
-                    Plugin.LogSource.LogInfo("[MaydayCareer] 构建选档界面: scrollbar ok");
-                }
-            }
-            catch (Exception e)
-            {
-                Plugin.LogSource.LogWarning("[MaydayCareer] 滚动条构建失败（不影响滚动滚轮）: " + e.Message);
+                Plugin.LogSource.LogWarning("[MaydayCareer] 滚动条构建失败（不影响滚轮滚动）: " + e.Message);
             }
 
             // 关闭按钮
