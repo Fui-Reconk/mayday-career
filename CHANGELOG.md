@@ -1,5 +1,24 @@
 # 更新记录
 
+## v1.3.0 — 暂停菜单存盘/读档按钮
+
+暂停菜单（ESC）里新增「存盘 / 读档」两个按钮，效果与热键一致，样式与游戏原按钮一致。
+
+**实现**
+
+- Harmony postfix 挂 `PauseScreen.Build()`，把游戏的 `resumeBtn` 整个 GameObject
+  克隆两份 —— 字体、底色、hover 动画、点击音效全部复用原按钮，
+  不碰游戏的 UITheme/UISprites 资源
+- 文案写入前清掉本地化键（`UIText.key`），同时写死 `current`/`shown` 状态字段，
+  防止屏幕未激活时 Awake 用克隆来的旧文案覆盖
+- 回调经 `DelegateSupport` 封送成 `Il2CppSystem.Action` 赋给 `UIButton.onClick`
+  （单播字段整体赋值，目标为静态方法，无 GC 风险）
+- 父容器有 LayoutGroup 就交给布局排位；没有就按原按钮高度手动下移
+- 点击反馈走游戏自带的通知条（`NotificationFeed.Push`）：存盘显示"第X段 · Y 块"，
+  失败显示红色提示
+
+**新配置**：`MenuButtons`（默认 `true`），关掉即回到纯热键模式。
+
 ## v1.2.0 — 性能优化与帧监测
 
 用户实测反馈：地面操作偶有粘滞感（空中暂无）。排查结论与对应优化：

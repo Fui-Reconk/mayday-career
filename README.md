@@ -127,6 +127,9 @@ BepInEx\plugins\MaydayCareer.dll
 > `J` 是"现在这样就挺好，记下来"，`F9` 是"回到上次记下来的那一步"。
 > **读档是覆盖操作**，按之前想清楚 —— 好在每次写盘都会把上一份留成备份。
 
+不习惯热键的话，按 `ESC` 打开暂停菜单，里面也有「存盘 / 读档」两个按钮
+（样式与游戏原按钮一致，点完会弹游戏自带的通知条）。不需要时把 `MenuButtons` 设为 `false`。
+
 ### 自动存盘的时机
 
 不开热键也会存，挂在游戏的阶段机上：
@@ -168,6 +171,7 @@ BepInEx\config\local.mayday.career.cfg
 | `LoadKey` | `F9` | 读档热键 |
 | `SaveKey` | `J` | 存盘热键 |
 | `GuardSave` | `true` | 存盘回退保护：当前局比存档更早时拒绝写盘 |
+| `MenuButtons` | `true` | 暂停菜单（ESC）里显示「存盘 / 读档」按钮 |
 | `PerfWatch` | `true` | 帧监测：出现卡顿时在日志里汇总卡顿帧数、当时阶段与插件自身耗时，用于区分"游戏卡"还是"插件卡" |
 | `ClearBeforeLoad` | `false` | 读档后钱变成两倍时改成 `true` |
 | `SaveItems` / `LoadItems` | `true` | 客舱器材的存 / 读 |

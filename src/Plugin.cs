@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "1.2.0";
+        public const string Version = "1.3.0";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
@@ -43,6 +43,7 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> GuardSave;
         internal static ConfigEntry<string> SaveKey;
         internal static ConfigEntry<bool> PerfWatch;
+        internal static ConfigEntry<bool> MenuButtons;
 
         public override void Load()
         {
@@ -170,6 +171,13 @@ namespace MaydayCareer
                 "并对比本插件自身每帧耗时，用来判断卡顿来自游戏还是插件。\n" +
                 "开销可忽略（每帧一次浮点比较）；没有卡顿的窗口不写任何日志。\n" +
                 "确认过原因后可以关掉。");
+
+            MenuButtons = Config.Bind(
+                "General",
+                "MenuButtons",
+                true,
+                "在暂停菜单（ESC）里加「存盘 / 读档」两个按钮，样式与游戏原按钮一致。\n" +
+                "点按钮的效果和按热键一样；按钮下方会弹游戏自带的通知条做反馈。");
 
             LogSource.LogInfo("[MaydayCareer] 已加载 v" + Version);
 
