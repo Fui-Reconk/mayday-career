@@ -1,10 +1,28 @@
 using System;
 using System.Collections.Generic;
+using HarmonyLib;
 using UnityEngine;
 using UnityEngine.UI;
 
 namespace MaydayCareer
 {
+    /// <summary>
+    /// 选档界面开着时拦截游戏的 ESC（UIRoot.HandleBack）：
+    /// 只关选档界面，游戏的菜单栈不动 —— 否则 ESC 会把底下的暂停菜单
+    /// 一起退掉，选档界面却还挂着（用户反馈）。
+    /// </summary>
+    [HarmonyPatch]
+    internal static class EscapeHook
+    {
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(global::Mayday.UI.UIRoot), "HandleBack")]
+        private static bool Prefix()
+        {
+            if (!SaveLoadScreen.IsOpen) return true; // 平时放行，游戏自己处理
+            SaveLoadScreen.Close();
+            return false; // 跳过游戏原逻辑
+        }
+    }
     /// <summary>
     /// galgame 式存读档界面（T-MOD-011 的进阶形态）。
     ///
