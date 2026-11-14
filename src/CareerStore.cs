@@ -496,29 +496,38 @@ namespace MaydayCareer
 
         // ---------- 存 ----------
 
+        // GuardSave 用的"存档里是第几段"内存缓存。
+        // 之前每次存盘都重新 Load() 整份 JSON 来对比 leg —— 纯粹为了读一个 int
+        // 却在主线程做了整文件 IO + 解析，存盘时机又全在地面（Arrived/Turnaround），
+        // 是落地瞬间卡顿的嫌疑之一。
+        //   -2 = 还没读过盘（首次存盘时补读一次）
+        //   -1 = 读过盘，没有存档文件
+        //   >=0 = 缓存的存档 leg
+        static int _cachedSavedLeg = -2;
+        static readonly object _ioLock = new object();
+
         public static void Save()
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
             var gs = global::Mayday.GameState.Instance;
             if (gs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] GameState 为空，跳过存盘"); return; }
 
             // 档位回退保护：刚启动时游戏总是从「第 0 段、600 块」的新公司开始，
             // 这时候按 J 就会把真进度抹成初始值（实测踩过：钱 1300 -> 600）。
             // 当前局比存档更早，就跳过并提示，让用户先读档。
+            // leg 从内存缓存取（见 _cachedSavedLeg），不再整文件重读。
             if (Plugin.GuardSave.Value)
             {
-                try
+                int savedLeg = GetCachedSavedLeg();
+                if (savedLeg > gs.Leg)
                 {
-                    var old = Load();
-                    if (old != null && old.leg > gs.Leg)
-                    {
-                        Plugin.LogSource.LogWarning(string.Format(
-                            "[MaydayCareer] 存盘已跳过：当前是第{0}段，存档是第{1}段（更靠后）。"
-                            + "刚开的新公司别急着存盘，先按读档键把进度拿回来。",
-                            gs.Leg, old.leg));
-                        return;
-                    }
+                    Plugin.LogSource.LogWarning(string.Format(
+                        "[MaydayCareer] 存盘已跳过：当前是第{0}段，存档是第{1}段（更靠后）。"
+                        + "刚开的新公司别急着存盘，先按读档键把进度拿回来。",
+                        gs.Leg, savedLeg));
+                    return;
                 }
-                catch (Exception ge) { Plugin.LogSource.LogWarning("[MaydayCareer] 回退保护检查失败（继续存盘）: " + ge.Message); }
             }
 
             var s = new CareerState
@@ -551,21 +560,120 @@ namespace MaydayCareer
             if (Plugin.SaveItems.Value) s.items = RecordItems(out skipped);
             else Plugin.LogSource.LogInfo("[MaydayCareer] 物品快照未启用（SaveItems=false）");
 
-            Directory.CreateDirectory(_dir);
+            sw.Stop();
 
-            // 写盘前先把上一份留一份。
-            // 用户有过连按读档键把进度按回旧值的经历 —— 读档是覆盖操作，
-            // 至少让被覆盖的那份还能手工捞回来。
-            if (File.Exists(_file)) BackupExisting();
+            // 主线程只负责"读状态 + 序列化 JSON"，写盘（含备份复制）全部转后台。
+            // 磁盘 I/O 的耗时不稳定（机械盘/杀毒扫描时能到几十毫秒），
+            // 放主线程就是落地结算那一帧的卡顿源。
+            //
+            // 为什么不用 ThreadPool/Task：interop 引用的 Il2Cppmscorlib 里也有
+            // System.Threading 的委托类型，编译器把 WaitCallback 解析到那边会报
+            // CS0656（NullableAttribute 构造器不可见）。改用自定义委托 +
+            // 单消费者写盘线程，类型绑定完全落在自己程序集里。
+            string json = s.ToJson();
+            _cachedSavedLeg = gs.Leg;
+            string snapshot =
+                "钱=" + s.money + " 债=" + s.debt + " 第" + s.leg + "段 升级=" + s.upgrades.Count +
+                " 座排=" + s.seatRows.Count + " 物品=" + s.items.Count;
 
-            string tmp = _file + ".tmp";
-            File.WriteAllText(tmp, s.ToJson(), new UTF8Encoding(false));
-            if (File.Exists(_file)) File.Delete(_file);
-            File.Move(tmp, _file);
+            lock (_ioLock)
+            {
+                _pendingJson = json;
+                _pendingSnapshot = snapshot;
+                _pendingSerializeMs = sw.Elapsed.TotalMilliseconds;
+                if (!_writeThreadAlive)
+                {
+                    _writeThreadAlive = true;
+                    var t = new System.Threading.Thread(_WriteWorker);
+                    t.IsBackground = true;
+                    t.Name = "MaydayCareer.SaveIO";
+                    t.Start();
+                }
+            }
+        }
 
-            Plugin.LogSource.LogInfo(string.Format(
-                "[MaydayCareer] 已保存 钱={0} 债={1} 第{2}段 升级={3} 座排={4} 物品={5} -> {6}",
-                s.money, s.debt, s.leg, s.upgrades.Count, s.seatRows.Count, s.items.Count, _file));
+        // 后台写盘的单消费者模型。_pendingJson 单槽：连续两次存盘时
+        // 后一份覆盖前一份排队中的内容（写盘期间前一份已经开始写，互不影响，
+        // _ioLock 保证 Delete/Move 不会交错出半新半旧的文件）。
+        static string _pendingJson;
+        static string _pendingSnapshot;
+        static double _pendingSerializeMs;
+        static bool _writeThreadAlive;
+
+        static void _WriteWorker()
+        {
+            while (true)
+            {
+                string json, snapshot;
+                double serializeMs;
+                lock (_ioLock)
+                {
+                    json = _pendingJson;
+                    if (json == null) { _writeThreadAlive = false; return; }
+                    _pendingJson = null;
+                    snapshot = _pendingSnapshot;
+                    _pendingSnapshot = null;
+                    serializeMs = _pendingSerializeMs;
+                    _pendingSerializeMs = 0;
+                }
+
+                try
+                {
+                    var swIo = System.Diagnostics.Stopwatch.StartNew();
+                    WriteSaveFiles(json);
+                    swIo.Stop();
+                    Plugin.LogSource.LogInfo(string.Format(
+                        "[MaydayCareer] 已保存 {0} -> {1}（序列化 {2:F1}ms，写盘后台 {3:F1}ms，{4:0.0}KB）",
+                        snapshot, _file, serializeMs, swIo.Elapsed.TotalMilliseconds, json.Length / 1024.0));
+                }
+                catch (Exception e)
+                {
+                    Plugin.LogSource.LogError("[MaydayCareer] 存盘写文件失败: " + e);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 取"存档里是第几段"。优先用内存缓存；只在完全没读过盘时读一次文件。
+        /// 读档成功 / 存盘成功都会刷新缓存，正常运行下不会再碰磁盘。
+        /// </summary>
+        static int GetCachedSavedLeg()
+        {
+            if (_cachedSavedLeg != -2) return _cachedSavedLeg;
+            try
+            {
+                var old = Load();
+                _cachedSavedLeg = old != null ? old.leg : -1;
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 回退保护预读失败（按无存档处理）: " + e.Message);
+                _cachedSavedLeg = -1;
+            }
+            return _cachedSavedLeg;
+        }
+
+        /// <summary>
+        /// 实际落盘：备份上一份 -> 写 tmp -> 原子替换。只在后台线程调用（见 Save）。
+        /// 加锁串行化：连续两次存盘（比如落地结算 + 手动 J）时后一次等前一次写完，
+        /// 不然 Delete/Move 交错会出现半新半旧的文件。
+        /// </summary>
+        static void WriteSaveFiles(string json)
+        {
+            lock (_ioLock)
+            {
+                Directory.CreateDirectory(_dir);
+
+                // 写盘前先把上一份留一份。
+                // 用户有过连按读档键把进度按回旧值的经历 —— 读档是覆盖操作，
+                // 至少让被覆盖的那份还能手工捞回来。
+                if (File.Exists(_file)) BackupExisting();
+
+                string tmp = _file + ".tmp";
+                File.WriteAllText(tmp, json, new UTF8Encoding(false));
+                if (File.Exists(_file)) File.Delete(_file);
+                File.Move(tmp, _file);
+            }
         }
 
         /// <summary>
@@ -679,6 +787,8 @@ namespace MaydayCareer
         {
             var s = Load();
             if (s == null) return;
+
+            _cachedSavedLeg = s.leg; // GuardSave 直接用内存值，不再重读盘
 
             var gs = global::Mayday.GameState.Instance;
             if (gs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] GameState 为空，无法读档"); return; }
@@ -893,9 +1003,19 @@ namespace MaydayCareer
 
         // ---------- 机体：损伤 + 掉漆 ----------
 
+        // 见 FindFuelSystem 的注释：同款缓存，理由相同。
+        static global::Mayday.Systems.HullSystem _hullSystem;
+
         static global::Mayday.Systems.HullSystem FindHull()
         {
-            try { return UnityEngine.Object.FindObjectOfType<global::Mayday.Systems.HullSystem>(); }
+            try
+            {
+                var hs = _hullSystem;
+                if (hs != null) return hs;
+                hs = UnityEngine.Object.FindObjectOfType<global::Mayday.Systems.HullSystem>();
+                _hullSystem = hs;
+                return hs;
+            }
             catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 找不到 HullSystem: " + e.Message); return null; }
         }
 
@@ -1197,9 +1317,21 @@ namespace MaydayCareer
         // 真值在 FuelSystem 上：fuelL / fuelR 是 SyncVar（NetworkfuelL / NetworkfuelR），
         // reserveTank 是本地模拟值。PlaneTelemetry.FuelLiters 只是每帧刷新的快照，
         // 写它没有意义 —— 下一帧就被模拟覆盖。
+        // 缓存单例引用：FindObjectOfType 是全场景扫描（原生调用 + 场景越大越慢），
+        // 存盘快照、读档还原、延迟校验都会用到。对象销毁后 Unity 包装器 == null，
+        // 缓存自动失效、下次重扫 —— 换场景/退房不会拿到死引用。
+        static global::Mayday.Systems.FuelSystem _fuelSystem;
+
         static global::Mayday.Systems.FuelSystem FindFuelSystem()
         {
-            try { return UnityEngine.Object.FindObjectOfType<global::Mayday.Systems.FuelSystem>(); }
+            try
+            {
+                var fs = _fuelSystem;
+                if (fs != null) return fs;
+                fs = UnityEngine.Object.FindObjectOfType<global::Mayday.Systems.FuelSystem>();
+                _fuelSystem = fs;
+                return fs;
+            }
             catch (Exception e)
             {
                 Plugin.LogSource.LogWarning("[MaydayCareer] 找不到 FuelSystem: " + e.Message);

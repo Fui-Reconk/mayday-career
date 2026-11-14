@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "1.1.2";
+        public const string Version = "1.2.0";
 
         internal static ManualLogSource LogSource;
         internal static ConfigEntry<bool> AutoSave;
@@ -42,6 +42,7 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> LoadHull;
         internal static ConfigEntry<bool> GuardSave;
         internal static ConfigEntry<string> SaveKey;
+        internal static ConfigEntry<bool> PerfWatch;
 
         public override void Load()
         {
@@ -161,6 +162,15 @@ namespace MaydayCareer
                 "存盘回退保护：当前局比存档更早（例如刚启动的新公司，第 0 段）时跳过存盘，\n" +
                 "免得把真进度抹成初始值。想强行覆盖就设 false。");
 
+            PerfWatch = Config.Bind(
+                "General",
+                "PerfWatch",
+                true,
+                "帧时间监测：每 10 秒汇总一次卡顿帧（>100ms）数量与当时阶段，\n" +
+                "并对比本插件自身每帧耗时，用来判断卡顿来自游戏还是插件。\n" +
+                "开销可忽略（每帧一次浮点比较）；没有卡顿的窗口不写任何日志。\n" +
+                "确认过原因后可以关掉。");
+
             LogSource.LogInfo("[MaydayCareer] 已加载 v" + Version);
 
             var harmony = new Harmony(Guid);
@@ -168,6 +178,7 @@ namespace MaydayCareer
 
             LogSource.LogInfo("[MaydayCareer] 补丁数 = " + harmony.GetPatchedMethods().Count());
             CareerStore.Init();
+            global::MaydayCareer.PerfWatch.Configure(PerfWatch.Value);
         }
     }
 

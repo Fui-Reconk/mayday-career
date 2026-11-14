@@ -168,6 +168,7 @@ BepInEx\config\local.mayday.career.cfg
 | `LoadKey` | `F9` | 读档热键 |
 | `SaveKey` | `J` | 存盘热键 |
 | `GuardSave` | `true` | 存盘回退保护：当前局比存档更早时拒绝写盘 |
+| `PerfWatch` | `true` | 帧监测：出现卡顿时在日志里汇总卡顿帧数、当时阶段与插件自身耗时，用于区分"游戏卡"还是"插件卡" |
 | `ClearBeforeLoad` | `false` | 读档后钱变成两倍时改成 `true` |
 | `SaveItems` / `LoadItems` | `true` | 客舱器材的存 / 读 |
 | `SaveFuel` / `LoadFuel` | `true` | 燃油的存 / 读 |
@@ -329,6 +330,19 @@ dotnet run Inspector.cs "C:\...\BepInEx\interop\Assembly-CSharp.dll" find "FuelL
 **Q：座位数没变**
 
 座排会按存档的 `rowMask` 补装。如果游戏又跑了一次新一轮重置，插件会自动补回 —— 日志里会打 `座排被重置（…）→ 补装N排`。
+
+**Q：地面操作有粘滞感 / 掉帧，是插件的问题吗**
+
+先看日志里的 `帧监测` 行（`PerfWatch` 默认开）。它每 10 秒汇总一次出现过的卡顿帧，并附上两个关键数字：
+
+```
+[Warning] [MaydayCareer] 帧监测（近 10s）：3 个 >100ms 卡顿帧，最长 210ms（阶段=Turnaround），插件自身每帧 ≤0.05ms
+```
+
+- **插件自身每帧 ≤0.05ms 左右**：插件的每帧开销可以忽略，卡顿来自游戏本身的地面物理与 AI（地面阶段相机、拖车、乘客、地上物品都在做物理模拟），与插件无关
+- **插件自身每帧明显偏大**（比如 >1ms）：把日志发到 issue，附上卡顿发生时的场景
+
+另外插件的两类重活都已移出关键路径：存盘写文件在后台线程（主线程只剩状态读取与 JSON 序列化，日志会打 `序列化 Xms，写盘后台 Xms`）；`FuelSystem` / `HullSystem` 引用有缓存，不做重复的全场景扫描。确认过原因后可以把 `PerfWatch` 关掉。
 
 **Q：能用在盗版上吗**
 

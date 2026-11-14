@@ -206,22 +206,37 @@ namespace MaydayCareer
     }
 
     /// <summary>
-    /// 每帧轮询热键。
+    /// 每帧轮询热键 + 延迟校验。
     ///
     /// 挂在 Mirror.NetworkManager.Update 上：IL2CPP 下不能自建 MonoBehaviour，
     /// 而 Update 是唯一能确定每帧都执行的现成方法（NetworkManager 全程存在）。
+    ///
+    /// 性能：热键轮询必须每帧（wasPressedThisFrame 只在按键那一帧为真）；
+    /// 三个延迟校验的精度是秒级，放进 250ms 节流门，大部分帧只做一次
+    /// float 比较。帧监测（PerfWatch）也在这里包裹，开销可忽略。
     /// </summary>
     [HarmonyPatch]
     internal static class TickHook
     {
+        static float _nextVerifyGate;
+
         [HarmonyPostfix]
         [HarmonyPatch(typeof(global::Mirror.NetworkManager), "Update")]
         private static void Postfix()
         {
+            PerfWatch.OnFrameBegin();
             Hotkey.Poll();
-            CareerStore.TickVerify();
-            CareerStore.TickVerifyEngines();
-            CareerStore.TickVerifyHull();
+
+            float t = UnityEngine.Time.unscaledTime;
+            if (t >= _nextVerifyGate)
+            {
+                _nextVerifyGate = t + 0.25f;
+                CareerStore.TickVerify();
+                CareerStore.TickVerifyEngines();
+                CareerStore.TickVerifyHull();
+            }
+
+            PerfWatch.OnFrameEnd();
         }
     }
 }
