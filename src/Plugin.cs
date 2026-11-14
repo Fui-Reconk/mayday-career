@@ -21,7 +21,7 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "1.3.1";
+        public const string Version = "1.3.2";
 
         internal static ManualLogSource LogSource;
         internal static BepInEx.Configuration.ConfigFile ConfigRef; // 运行时写档位选择后 Save 用
