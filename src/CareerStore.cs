@@ -300,6 +300,31 @@ namespace MaydayCareer
                 hull.HullToJson(sb);
                 sb.Append(",\n");
             }
+            // engines 的 JSON 序列化在 v1.0.0 清理 breaches 块时被整段误删了
+            // （当时 engines 恰好排在 breaches 和 upgrades 之间）——
+            // 采集一直在跑，但从来没写进文件，读档只好一直跳过。v1.1.2 找回。
+            sb.Append("    \"engines\": [");
+            for (int ei = 0; ei < engines.Count; ei++)
+            {
+                var e = engines[ei];
+                if (ei > 0) sb.Append(", ");
+                sb.Append("{\"index\": ").Append(e.index);
+                sb.Append(", \"state\": ").Append(e.state);
+                sb.Append(", \"faults\": ").Append(e.faults);
+                sb.Append(", \"cowl\": ").Append(e.cowl);
+                sb.Append(", \"bat\": ").Append(e.bat);
+                sb.Append(", \"swap\": ").Append(e.swap);
+                sb.Append(", \"swapSerial\": ").Append(e.swapSerial);
+                sb.Append(", \"rpm\": ").Append(Json.Num(e.rpm));
+                sb.Append(", \"oil\": ").Append(Json.Num(e.oil));
+                sb.Append(", \"lOil\": ").Append(Json.Num(e.lOil));
+                sb.Append(", \"temp\": ").Append(Json.Num(e.temp));
+                sb.Append(", \"fire\": ").Append(Json.Num(e.fire));
+                sb.Append(", \"batt\": ").Append(Json.Num(e.batt));
+                sb.Append(", \"swapP\": ").Append(Json.Num(e.swapP));
+                sb.Append('}');
+            }
+            sb.Append("],\n");
             sb.Append("    \"upgrades\": [");
             for (int i = 0; i < upgrades.Count; i++)
             {
