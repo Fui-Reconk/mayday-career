@@ -657,6 +657,7 @@ namespace MaydayCareer
 
             var gs = global::Mayday.GameState.Instance;
             if (gs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] GameState 为空，无法读档"); return; }
+            _savedLeg = s.leg;
 
             // 旧存档必须显式喊出来。
             // 否则表现是"读档成功、座位重建补装0排、物品重建目标0件" ——
@@ -1353,6 +1354,11 @@ namespace MaydayCareer
         // （新一轮 ServerResetForNewRun、站点重锚），所以要能随时复查补回。
         static int _expectedRowMask = -1;
 
+        // 读档那一局的段数。坠机或手动重开会把整局打回新公司，
+        // 此时当前段数会小于它 —— 座排自愈必须就此罢手，
+        // 否则新公司会凭空继承旧档的座椅（用户实测踩过：坠机后新档自动补齐 8 排）。
+        static int _savedLeg = -1;
+
         /// <summary>
         /// 复查座排还在不在，缺了就补回来。
         /// 调用点：读档后 3 秒、以及每次 GroundCrew.ServerReanchor 之后。
@@ -1362,6 +1368,22 @@ namespace MaydayCareer
             if (_expectedRowMask <= 0) return;
             try
             {
+                // 当前局比读档那局更早 = 坠机/重开后进入的新公司。
+                // 座排跟钱、升级一样归游戏重置，我们不再硬拉回存档值。
+                try
+                {
+                    var gsNow = global::Mayday.GameState.Instance;
+                    if (gsNow != null && gsNow.Leg < _savedLeg)
+                    {
+                        _expectedRowMask = -1;
+                        Plugin.LogSource.LogInfo(string.Format(
+                            "[MaydayCareer] 新一轮是第{0}段（存档是第{1}段），座排恢复游戏初始，不再自愈",
+                            gsNow.Leg, _savedLeg));
+                        return;
+                    }
+                }
+                catch { }
+
                 var pd = global::Mayday.Passengers.PassengerDirector.Instance;
                 if (pd == null) return;
 
