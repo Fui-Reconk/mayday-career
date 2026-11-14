@@ -207,9 +207,14 @@ namespace MaydayCareer
             try { CareerStore.EnsureSavedSeats("新一轮重置"); }
             catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 新一轮重置后补座排异常: " + e); }
 
-            // 官方开新档不清场：清掉上一局残留的物品，补一份全新开局 kit
+            // 官方开新档不清场：仅新公司（Leg=0）清残留 + 补全新 kit
             try { CareerStore.ClearItemsOnRunReset("新一轮重置"); }
             catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 新一轮重置清场异常: " + e); }
+
+            // 跨机场读档：世界重建链的最后一环是 ServerResetForNewRun，
+            // 在这里做最终的物品还原（此时世界不会再被清）
+            try { CareerStore.OnRunResetCleared(); }
+            catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 重置后物品还原异常: " + e); }
         }
     }
 

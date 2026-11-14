@@ -2395,9 +2395,10 @@ namespace MaydayCareer
         {
             if (!_restorePending) return;
             if (_restoreTries >= MaxRestoreTries) return;
-            // 重锚 = 世界重建（含读档机场切换触发的重建）已完成。
-            // 这次还原落在最终世界里，成功即可收尾。
-            _restoreWaitRebuild = false;
+            // 注意：世界重建链的顺序是 重锚在前、ServerResetForNewRun 在最后。
+            // 跨机场读档时这次还原仍会被随后的重置清掉，所以这里不清
+            // _restoreWaitRebuild / _restorePending —— 最终还原在
+            // OnRunResetCleared（新一轮重置之后）收尾。
             RestoreItems(_pendingItems);
         }
 
@@ -2544,19 +2545,27 @@ namespace MaydayCareer
         }
 
         /// <summary>
-        /// 新一轮 / 手动重开时清场：删掉上一局残留的可持久化物品，
-        /// 再让 ServiceDirector 补一份全新的开局 kit。
+        /// 新一轮重置时清场：仅限新公司（Leg==0）—— 坠机/重开进新公司时，
+        /// 官方不清上一局残留物品（社区反馈过的 bug），我们清掉并补一份
+        /// 全新开局 kit。普通换段（Leg≥1）物品按官方行为保留，绝不清。
         ///
-        /// 背景：官方开新档不清场（社区用户也反馈过），旧物品会一直躺在机上。
-        /// kit 用 ServerSpawnKit(false) 重新生成 —— 官方自己的逻辑，
-        /// 会走"starting kit: 32 spawned"那条路。
-        /// 配置 ClearItemsOnNewRun 控制（默认开）。
+        /// 注意重建链顺序：读档机场切换时的世界重建 = 重锚在前、
+        /// ServerResetForNewRun 在最后 —— 所以跨机场读档的最终物品还原
+        /// 挂在本方法之后（见 OnRunResetCleared），不挂重锚。
         /// </summary>
         public static void ClearItemsOnRunReset(string why)
         {
             if (!Plugin.ClearItemsOnNewRun.Value) return;
             try
             {
+                int leg = -1;
+                try { leg = global::Mayday.GameState.Instance?.Leg ?? -1; } catch { }
+                if (leg != 0)
+                {
+                    // 普通换段 / 会话中：物品保留，不清
+                    return;
+                }
+
                 int removed = ClearWorldItems(why);
                 if (removed <= 0) return; // 本来就干净，别去动 kit
 
@@ -2577,6 +2586,26 @@ namespace MaydayCareer
             catch (Exception e)
             {
                 Plugin.LogSource.LogWarning("[MaydayCareer] 新一轮清场异常（" + why + "）: " + e.Message);
+            }
+        }
+
+        /// <summary>
+        /// 新一轮重置链跑完后的收尾：如果还有待还原的物品（跨机场读档场景），
+        /// 在这里做最终还原 —— 此时的世界就是最终世界，不会再被重建清掉。
+        /// </summary>
+        public static void OnRunResetCleared()
+        {
+            if (!_restorePending || _pendingItems == null || _pendingItems.Count == 0) return;
+            if (_restoreTries >= MaxRestoreTries) return;
+            try
+            {
+                Plugin.LogSource.LogInfo("[MaydayCareer] 新一轮重置完成 —— 在最终世界里还原物品");
+                _restoreWaitRebuild = false;
+                RestoreItems(_pendingItems);
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogError("[MaydayCareer] 最终物品还原异常: " + e);
             }
         }
 
