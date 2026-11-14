@@ -72,10 +72,10 @@ namespace MaydayCareer
 
             DumpHierarchy(parent, hasLayout);
 
-            // 可视最底部的原按钮（世界 Y 最小）：我们的按钮插它正上方，退出保持最底
-            var bottom = BottomMostSibling(parent);
+            // 可视最底部的原按钮：「退出」保持在菜单最底下，我们的按钮插它正上方
+            var bottom = BottomMostSibling(parent, hasLayout);
             Plugin.LogSource.LogInfo("[MaydayCareer] 按钮定位基准: " +
-                (bottom != null ? bottom.name + " worldY=" + bottom.position.y.ToString("F1") : "无（退回 resumeBtn 下方）"));
+                (bottom != null ? bottom.name + " sibling=" + bottom.GetSiblingIndex() : "无（退回 resumeBtn 下方）"));
 
             if (hasLayout)
             {
@@ -101,10 +101,30 @@ namespace MaydayCareer
             Plugin.LogSource.LogInfo("[MaydayCareer] 暂停菜单按钮已注入（存盘/读档 → 选档界面）");
         }
 
-        /// <summary>可视最底部的原按钮（排除我们的克隆）。比较用世界坐标，锚点差异不影响。</summary>
-        static UnityEngine.RectTransform BottomMostSibling(UnityEngine.Transform parent)
+        /// <summary>
+        /// 可视最底部的原按钮（排除我们的克隆）。
+        /// 有 LayoutGroup 的容器：Build 期布局还没跑、所有子物体 worldY 相同
+        /// （实测全是 722.7），比较世界坐标毫无意义 —— 用兄弟序号（最后 = 最底）。
+        /// 手动锚定的容器才按世界坐标比较。
+        /// </summary>
+        static UnityEngine.RectTransform BottomMostSibling(UnityEngine.Transform parent, bool hasLayout)
         {
             UnityEngine.RectTransform bottom = null;
+            if (hasLayout)
+            {
+                int maxIdx = -1;
+                for (int i = 0; i < parent.childCount; i++)
+                {
+                    var child = parent.GetChild(i);
+                    if (child.name == SaveBtnName || child.name == LoadBtnName) continue;
+                    if (!child.gameObject.activeInHierarchy) continue;
+                    var rt = child.TryCast<UnityEngine.RectTransform>();
+                    if (rt == null) continue;
+                    if (i > maxIdx) { maxIdx = i; bottom = rt; }
+                }
+                return bottom;
+            }
+
             float minY = float.MaxValue;
             for (int i = 0; i < parent.childCount; i++)
             {

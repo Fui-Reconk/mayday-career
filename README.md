@@ -174,7 +174,7 @@ BepInEx\config\local.mayday.career.cfg
 | `SaveKey` | `J` | 存盘热键 |
 | `GuardSave` | `true` | 存盘回退保护：热键存盘时当前局比存档更早则拒绝。选档界面里的覆盖有二次确认，不受此限 |
 | `MenuButtons` | `true` | 暂停菜单（ESC）里显示「存盘 / 读档」按钮，点击弹出选档界面 |
-| `SaveSlots` | `3` | 存档档位数（1-6）。档1 = 主档 `career.json`；档2+ = `career.slotN.json` |
+| `SaveSlots` | `3` | 手动存档档位数（1-12）。档1 = 主档 `career.json`；档2+ = `career.slotN.json`。档多时选档界面自动出现滚动条 |
 | `ActiveSlot` | `1` | 上次使用的档位（选档界面点行时自动写回，一般不用手改） |
 | `ClearItemsOnNewRun` | `true` | 新一轮重置/手动重开时清空上一局残留物品并补全新的开局 kit（官方开新档不清场） |
 | `PerfWatch` | `true` | 帧监测：出现卡顿时在日志里汇总卡顿帧数、当时阶段与插件自身耗时，用于区分"游戏卡"还是"插件卡" |
@@ -311,7 +311,7 @@ dotnet run Inspector.cs "C:\...\BepInEx\interop\Assembly-CSharp.dll" find "FuelL
 
 ## 常见问题
 
-**Q：`补丁数` 不是 9**
+**Q：`补丁数` 和说明对不上**
 
 说明有补丁没挂上。游戏更新改了方法名，需要重新编译（见 [从源码构建](#从源码构建)）。日志里搜 `MaydayCareer` 能看到具体的失败信息。
 

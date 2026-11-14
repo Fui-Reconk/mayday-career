@@ -239,6 +239,7 @@ namespace MaydayCareer
         {
             PerfWatch.OnFrameBegin();
             Hotkey.Poll();
+            SaveLoadScreen.PollEsc(); // 选档界面开着时按 ESC = 只关它（游戏侧被 EscapeHook 拦住）
 
             float t = UnityEngine.Time.unscaledTime;
             if (t >= _nextVerifyGate)
