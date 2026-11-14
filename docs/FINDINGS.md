@@ -275,6 +275,29 @@ per-panel：damage/dirt (SyncList<float>)、lDamage/lDirt/patchT/patchLast (floa
 6. ApplyAllSectionPaint() → MarkAllDirty()
 ```
 
+### 实测：喷漆与区段修复的状态机（v1.1.2 后，用户实机操作得出）
+
+**喷漆（spray can）：**
+
+- `paintCover`（cover）= 漆面完好度，**喷漆会涨**：全机 0.16→0.35，重点喷的面板到 0.55
+- `dirt` = 脏污，**喷罐顺带清零**：0.66→0、0.41→0
+- `damage` / `coverDamage` 完全不受喷漆影响 —— 结构伤归锤子/补丁，外观归喷罐
+- `paintCover` 同时是**派生值**：存档存 0，读档后 3 秒回读变 0.41、再变 0.56（模拟朝当前应有状态回归）。视觉由 damage/dirt/颜色驱动，所以不影响 —— 但别指望把它当权威数据存
+
+**区段修复（三段状态机）：**
+
+```
+sStage = 0      健康，无需修理
+sStage = 1/2/3  三段各自"待做"的档位（对应 HullSectTuning.FrameSeconds / PlateSeconds / PaintSeconds）
+sProg           当前段的累积进度（长按工作累积）
+```
+
+- 完成一段工作 → `sStage` 前进一位；三段全做完 → 回到 0（健康）
+- **部分修复不减少面板 `damage`** —— 修到一半时，进度只存在于区段状态机里，
+  面板 damage 要等整段结算。这就是 `sStage`/`sProg` 必须单独存的原因：修一半的进度也能跨局保留
+- 实测记录：面板 #2 做完第 1 段 → `stage 1→2`；面板 #4 做完第 1、2 段 → `stage 1→3`（progress 0.10）；
+  未动的 #0 停在 1。面板 damage/dirt/patchT 全程未变
+
 ## 【历史，已推翻】机体损伤与机翼掉漆：查了九轮，最终整块放弃
 
 结论先写在最前面：**机体损伤（破洞 / 分段）和机翼掉漆在 v1.0.0 里都不保存**，代码也删干净了。下面是把这条路走死的过程，留给以后想接着挖的人。
