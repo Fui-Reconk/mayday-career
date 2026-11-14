@@ -468,17 +468,74 @@ namespace MaydayCareer
     internal static class CareerStore
     {
         static string _dir;
-        static string _file;
-        static string _bakFile;
 
-        public static string FilePath => _file;
+        // ---------- 多档位 ----------
+        //
+        // 档0 = career.autosave.json（自动存档专用文件，落地/周转时自动写入，
+        //       手动不可写、选档界面里灰显；读档模式可选它回滚到"上次落地"）
+        // 档1 = career.json（主档，兼容旧档、旧流程与已发布的说明）；
+        // 档2+ = career.slotN.json（独立文件，备份同理 career.slotN.bak.json）。
+        //
+        // 所有手动读写（含热键）都作用在"当前档位"上；档位在选档界面
+        // 点行决定，选择持久化在 BepInEx 配置的 ActiveSlot 里。
+        // 自动流程只写档0，永远不会碰手动槽位 —— 之前"新公司落地自动存盘
+        // 抹掉真档"的事故从结构上不再可能。
+        //
+        // GuardSave 的"存档是第几段"缓存按档位各存一份：切档后首次
+        // 存盘会对新档位做一次文件预读，之后走内存。
+        // 档0 不参与 GuardSave（它是滚动检查点，本意就是每次落地覆盖）。
+        static int _activeSlot = 1;
+        public static int ActiveSlot => _activeSlot;
+
+        public const int AutoSlot = 0;
+
+        public static int SlotCount => Math.Max(1, Math.Min(6, Plugin.SaveSlots?.Value ?? 3));
+
+        public static void SetActiveSlot(int slot)
+        {
+            _activeSlot = Math.Max(1, Math.Min(SlotCount, slot));
+        }
+
+        /// <summary>
+        /// 档位的展示信息（选档界面用）：存档时间 + 段数 + 金钱。
+        /// 文件不存在返回 null（界面显示"空"）。slot 0 = 自动存档。
+        /// </summary>
+        public static string SlotInfo(int slot)
+        {
+            try
+            {
+                string path = FileFor(slot);
+                if (!File.Exists(path)) return null;
+                var s = LoadFrom(path);
+                if (s == null) return null;
+                return s.savedAt.Replace('T', ' ') + " ｜ 第" + s.leg + "段 · " + s.money + "块";
+            }
+            catch { return null; }
+        }
+
+        static string FileFor(int slot)
+        {
+            if (slot == AutoSlot) return Path.Combine(_dir, "career.autosave.json");
+            return slot == 1
+                ? Path.Combine(_dir, "career.json")
+                : Path.Combine(_dir, "career.slot" + slot + ".json");
+        }
+
+        static string BakFor(int slot)
+        {
+            if (slot == AutoSlot) return Path.Combine(_dir, "career.autosave.bak.json");
+            return slot == 1
+                ? Path.Combine(_dir, "career.bak.json")
+                : Path.Combine(_dir, "career.slot" + slot + ".bak.json");
+        }
+
+        public static string FilePath => FileFor(_activeSlot);
 
         public static void Init()
         {
             _dir = ResolveDir();
-            _file = Path.Combine(_dir, "career.json");
-            _bakFile = Path.Combine(_dir, "career.bak.json");
-            Plugin.LogSource.LogInfo("[MaydayCareer] 存档路径 = " + _file);
+            Plugin.LogSource.LogInfo("[MaydayCareer] 存档路径 = " + FileFor(1)
+                + "（手动档位数 = " + SlotCount + "，自动存档 = " + FileFor(AutoSlot) + "）");
         }
 
         static string ResolveDir()
@@ -496,37 +553,106 @@ namespace MaydayCareer
 
         // ---------- 存 ----------
 
-        // GuardSave 用的"存档里是第几段"内存缓存。
+        // GuardSave 用的"存档里是第几段"内存缓存，按档位各一份。
         // 之前每次存盘都重新 Load() 整份 JSON 来对比 leg —— 纯粹为了读一个 int
         // 却在主线程做了整文件 IO + 解析，存盘时机又全在地面（Arrived/Turnaround），
         // 是落地瞬间卡顿的嫌疑之一。
         //   -2 = 还没读过盘（首次存盘时补读一次）
         //   -1 = 读过盘，没有存档文件
         //   >=0 = 缓存的存档 leg
-        static int _cachedSavedLeg = -2;
+        static int[] _cachedLegs; // 下标即档位（1 起），按需分配
         static readonly object _ioLock = new object();
 
+        static int[] EnsureLegCache()
+        {
+            if (_cachedLegs == null)
+                _cachedLegs = new int[8]; // 档位数上限 6，留些余量
+            for (int i = 0; i < _cachedLegs.Length && i <= SlotCount; i++)
+                if (i > 0 && _cachedLegs[i] == 0) _cachedLegs[i] = -2;
+            return _cachedLegs;
+        }
+
+        static int GetCachedSavedLeg(int slot)
+        {
+            var cache = EnsureLegCache();
+            if (slot >= cache.Length) return -2;
+            if (cache[slot] != -2) return cache[slot];
+            try
+            {
+                var old = LoadFrom(FileFor(slot));
+                cache[slot] = old != null ? old.leg : -1;
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 回退保护预读失败（按无存档处理）: " + e.Message);
+                cache[slot] = -1;
+            }
+            return cache[slot];
+        }
+
+        /// <summary>
+        /// 自动存档（落地/周转/坠机检查点）：写入独立的 career.autosave.json。
+        /// 与手动槽位完全隔离 —— 自动流程永远不碰档1..N，
+        /// "新公司落地自动存盘抹掉真档"的事故从结构上不可能。
+        /// 自动存档是滚动检查点，没有 GuardSave（本意就是每次落地覆盖）。
+        /// 调用点（阶段机）不关心结果。
+        /// </summary>
+        public static void AutoSave()
+        {
+            SaveToSlot(AutoSlot, guard: false);
+        }
+
+        /// <summary>手动存盘（热键 J）：写当前档位，GuardSave 照常拦截。</summary>
         public static void Save()
+        {
+            SaveToSlot(_activeSlot, guard: true);
+        }
+
+        /// <summary>
+        /// 尝试存盘到当前档位。返回 null = 已提交写盘（后台线程完成落盘）；
+        /// 返回字符串 = 跳过原因（GameState 未就绪 / GuardSave 拦截）。
+        /// 菜单按钮用返回值在 toast 里如实告知用户，不能静默返回——
+        /// 之前按钮误报"已存盘"，实际被 GuardSave 拦了，用户以为存的逻辑没生效。
+        ///
+        /// manual=true 跳过 GuardSave：选档界面里点行覆盖是带二次确认的明确操作，
+        /// 不该被自动拦截（v1.3.0 用户反馈"低档覆盖的去了吧"）。
+        /// 拦截保留给没有确认环节的路径：热键 J。
+        /// </summary>
+        public static string TrySave(bool manual = false)
+        {
+            return SaveToSlot(_activeSlot, guard: !manual);
+        }
+
+        /// <summary>
+        /// 实际的存盘入口：slot 0 = 自动存档文件，1..N = 手动档位。
+        /// guard=true 时应用 GuardSave 段数回退保护（仅手动档位有意义）。
+        /// 主线程只做状态读取与 JSON 序列化，写盘在后台线程。
+        /// </summary>
+        static string SaveToSlot(int slot, bool guard)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
             var gs = global::Mayday.GameState.Instance;
-            if (gs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] GameState 为空，跳过存盘"); return; }
+            if (gs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] GameState 为空，跳过存盘"); return "GameState 未就绪，跳过存盘"; }
 
             // 档位回退保护：刚启动时游戏总是从「第 0 段、600 块」的新公司开始，
             // 这时候按 J 就会把真进度抹成初始值（实测踩过：钱 1300 -> 600）。
             // 当前局比存档更早，就跳过并提示，让用户先读档。
-            // leg 从内存缓存取（见 _cachedSavedLeg），不再整文件重读。
-            if (Plugin.GuardSave.Value)
+            // leg 从内存缓存取（按档位），不再整文件重读。
+            // 自动存档（slot 0）不适用 —— 它是滚动检查点。
+            if (guard && slot != AutoSlot && Plugin.GuardSave.Value)
             {
-                int savedLeg = GetCachedSavedLeg();
+                int savedLeg = GetCachedSavedLeg(slot);
                 if (savedLeg > gs.Leg)
                 {
+                    string reason = string.Format(
+                        "已跳过：当前第{0}段，档{2}已是第{1}段（更靠后），不覆盖",
+                        gs.Leg, savedLeg, slot);
                     Plugin.LogSource.LogWarning(string.Format(
-                        "[MaydayCareer] 存盘已跳过：当前是第{0}段，存档是第{1}段（更靠后）。"
+                        "[MaydayCareer] 存盘已跳过（档{2}）：当前是第{0}段，档{2}是第{1}段（更靠后）。"
                         + "刚开的新公司别急着存盘，先按读档键把进度拿回来。",
-                        gs.Leg, savedLeg));
-                    return;
+                        gs.Leg, savedLeg, slot));
+                    return reason;
                 }
             }
 
@@ -571,13 +697,18 @@ namespace MaydayCareer
             // CS0656（NullableAttribute 构造器不可见）。改用自定义委托 +
             // 单消费者写盘线程，类型绑定完全落在自己程序集里。
             string json = s.ToJson();
-            _cachedSavedLeg = gs.Leg;
+            if (slot > 0)
+            {
+                var cache = EnsureLegCache();
+                if (slot < cache.Length) cache[slot] = gs.Leg;
+            }
             string snapshot =
-                "钱=" + s.money + " 债=" + s.debt + " 第" + s.leg + "段 升级=" + s.upgrades.Count +
+                "[" + (slot == AutoSlot ? "自动" : "档" + slot) + "] 钱=" + s.money + " 债=" + s.debt + " 第" + s.leg + "段 升级=" + s.upgrades.Count +
                 " 座排=" + s.seatRows.Count + " 物品=" + s.items.Count;
 
             lock (_ioLock)
             {
+                _pendingSlot = slot;
                 _pendingJson = json;
                 _pendingSnapshot = snapshot;
                 _pendingSerializeMs = sw.Elapsed.TotalMilliseconds;
@@ -590,11 +721,13 @@ namespace MaydayCareer
                     t.Start();
                 }
             }
+            return null; // 已提交后台写盘
         }
 
         // 后台写盘的单消费者模型。_pendingJson 单槽：连续两次存盘时
         // 后一份覆盖前一份排队中的内容（写盘期间前一份已经开始写，互不影响，
         // _ioLock 保证 Delete/Move 不会交错出半新半旧的文件）。
+        static int _pendingSlot = 1;
         static string _pendingJson;
         static string _pendingSnapshot;
         static double _pendingSerializeMs;
@@ -604,6 +737,7 @@ namespace MaydayCareer
         {
             while (true)
             {
+                int slot;
                 string json, snapshot;
                 double serializeMs;
                 lock (_ioLock)
@@ -611,6 +745,7 @@ namespace MaydayCareer
                     json = _pendingJson;
                     if (json == null) { _writeThreadAlive = false; return; }
                     _pendingJson = null;
+                    slot = _pendingSlot;
                     snapshot = _pendingSnapshot;
                     _pendingSnapshot = null;
                     serializeMs = _pendingSerializeMs;
@@ -620,11 +755,12 @@ namespace MaydayCareer
                 try
                 {
                     var swIo = System.Diagnostics.Stopwatch.StartNew();
-                    WriteSaveFiles(json);
+                    string file = FileFor(slot);
+                    WriteSaveFiles(slot, json);
                     swIo.Stop();
                     Plugin.LogSource.LogInfo(string.Format(
                         "[MaydayCareer] 已保存 {0} -> {1}（序列化 {2:F1}ms，写盘后台 {3:F1}ms，{4:0.0}KB）",
-                        snapshot, _file, serializeMs, swIo.Elapsed.TotalMilliseconds, json.Length / 1024.0));
+                        snapshot, file, serializeMs, swIo.Elapsed.TotalMilliseconds, json.Length / 1024.0));
                 }
                 catch (Exception e)
                 {
@@ -634,32 +770,14 @@ namespace MaydayCareer
         }
 
         /// <summary>
-        /// 取"存档里是第几段"。优先用内存缓存；只在完全没读过盘时读一次文件。
-        /// 读档成功 / 存盘成功都会刷新缓存，正常运行下不会再碰磁盘。
-        /// </summary>
-        static int GetCachedSavedLeg()
-        {
-            if (_cachedSavedLeg != -2) return _cachedSavedLeg;
-            try
-            {
-                var old = Load();
-                _cachedSavedLeg = old != null ? old.leg : -1;
-            }
-            catch (Exception e)
-            {
-                Plugin.LogSource.LogWarning("[MaydayCareer] 回退保护预读失败（按无存档处理）: " + e.Message);
-                _cachedSavedLeg = -1;
-            }
-            return _cachedSavedLeg;
-        }
-
-        /// <summary>
         /// 实际落盘：备份上一份 -> 写 tmp -> 原子替换。只在后台线程调用（见 Save）。
         /// 加锁串行化：连续两次存盘（比如落地结算 + 手动 J）时后一次等前一次写完，
         /// 不然 Delete/Move 交错会出现半新半旧的文件。
         /// </summary>
-        static void WriteSaveFiles(string json)
+        static void WriteSaveFiles(int slot, string json)
         {
+            string file = FileFor(slot);
+            string bak = BakFor(slot);
             lock (_ioLock)
             {
                 Directory.CreateDirectory(_dir);
@@ -667,29 +785,31 @@ namespace MaydayCareer
                 // 写盘前先把上一份留一份。
                 // 用户有过连按读档键把进度按回旧值的经历 —— 读档是覆盖操作，
                 // 至少让被覆盖的那份还能手工捞回来。
-                if (File.Exists(_file)) BackupExisting();
+                if (File.Exists(file)) BackupExisting(slot);
 
-                string tmp = _file + ".tmp";
+                string tmp = file + ".tmp";
                 File.WriteAllText(tmp, json, new UTF8Encoding(false));
-                if (File.Exists(_file)) File.Delete(_file);
-                File.Move(tmp, _file);
+                if (File.Exists(file)) File.Delete(file);
+                File.Move(tmp, file);
             }
         }
 
         /// <summary>
-        /// 把当前 career.json 复制成 career.bak.json（覆盖旧 bak）。
+        /// 把当前档位的存档复制成对应 .bak（覆盖旧 bak）。
         ///
         /// 失败只 warn，绝不允许挡住正常存盘 —— 备份是兜底，不是存盘的前置条件。
         /// 只做"写档前备份上一份"，不做"读档前备份"：语义简单，
-        /// 用户随时能手工把 bak 改名回 career.json 捞回上一次。
+        /// 用户随时能手工把 bak 改名回主档名捞回上一次。
         /// </summary>
-        static void BackupExisting()
+        static void BackupExisting(int slot)
         {
             try
             {
-                File.Copy(_file, _bakFile, true);
+                string file = FileFor(slot);
+                string bak = BakFor(slot);
+                File.Copy(file, bak, true);
                 Plugin.LogSource.LogInfo(
-                    "[MaydayCareer] 已备份上一份存档 -> " + Path.GetFileName(_bakFile));
+                    "[MaydayCareer] 已备份上一份存档 -> " + Path.GetFileName(bak));
             }
             catch (Exception e)
             {
@@ -723,10 +843,16 @@ namespace MaydayCareer
 
         public static CareerState Load()
         {
+            return LoadFrom(FileFor(_activeSlot));
+        }
+
+        /// <summary>读指定文件（档位缓存预读用，不打扰当前档位语义）。</summary>
+        static CareerState LoadFrom(string path)
+        {
             try
             {
-                if (!File.Exists(_file)) { Plugin.LogSource.LogInfo("[MaydayCareer] 没有存档，按新公司开局"); return null; }
-                var s = CareerState.FromJson(File.ReadAllText(_file, Encoding.UTF8));
+                if (!File.Exists(path)) { Plugin.LogSource.LogInfo("[MaydayCareer] 没有存档，按新公司开局"); return null; }
+                var s = CareerState.FromJson(File.ReadAllText(path, Encoding.UTF8));
                 if (s == null) { Plugin.LogSource.LogWarning("[MaydayCareer] 存档解析失败"); return null; }
                 return s;
             }
@@ -783,16 +909,41 @@ namespace MaydayCareer
             Apply();
         }
 
+        /// <summary>读当前档位（热键 F9 / AutoLoadOnStart 用）。</summary>
         public static void Apply()
         {
-            var s = Load();
+            ApplySlot(_activeSlot);
+        }
+
+        /// <summary>
+        /// 读指定档位并应用到当前进度。slot 0 = 自动存档（选档界面用，
+        /// 回滚到"上次落地状态"）。手动档位会刷新 GuardSave 的 leg 缓存；
+        /// 自动档不刷新（它不是手动槽位语义）。
+        /// </summary>
+        public static void ApplySlot(int slot)
+        {
+            _applied = true; // 手动读过档后，PreShift 的 ApplyOnce 不再重复应用
+            var s = LoadFrom(FileFor(slot));
             if (s == null) return;
 
-            _cachedSavedLeg = s.leg; // GuardSave 直接用内存值，不再重读盘
+            if (slot > 0)
+            {
+                var legCache = EnsureLegCache();
+                if (slot < legCache.Length) legCache[slot] = s.leg; // GuardSave 直接用内存值，不再重读盘
+            }
 
             var gs = global::Mayday.GameState.Instance;
             if (gs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] GameState 为空，无法读档"); return; }
             _savedLeg = s.leg;
+
+            // 读档前的会话机场。若与存档机场不同，改完 CurrentAirport 游戏
+            // 会重建世界（ServerResetForNewRun + 站点重锚），刚还原的物品会被
+            // 清掉 —— 物品还原必须等重建完的重锚信号后再来一次（见 _restoreWaitRebuild）。
+            int airportBefore = -1;
+            try { airportBefore = gs.CurrentAirport; } catch { }
+
+            Plugin.LogSource.LogInfo("[MaydayCareer] 本次读的是"
+                + (slot == AutoSlot ? "自动存档（" + FileFor(AutoSlot) + "）" : "档" + slot + "（" + Path.GetFileName(FileFor(slot)) + "）"));
 
             // 旧存档必须显式喊出来。
             // 否则表现是"读档成功、座位重建补装0排、物品重建目标0件" ——
@@ -823,6 +974,40 @@ namespace MaydayCareer
             {
                 if (!gs.HasUpgrade(id)) { gs.ServerAddUpgrade(id); added++; }
             }
+
+            // 升级回退：本局多买、存档里没有的 → 从台账移除（倒序防索引位移）。
+            // 之前只加不减，"已有升级不会回退"（用户反馈）。台账回退后，
+            // 升级的实物（咖啡机等）由物品精确还原清掉；座排无卸载 API，暂不回退。
+            int removedUpg = 0;
+            try
+            {
+                var list = gs.Upgrades;
+                if (list != null)
+                {
+                    for (int i = list.Count - 1; i >= 0; i--)
+                    {
+                        string owned = null;
+                        try { owned = list[i]?.ToString(); } catch { }
+                        if (string.IsNullOrEmpty(owned)) continue;
+                        if (!s.upgrades.Contains(owned))
+                        {
+                            try { list.RemoveAt(i); removedUpg++; }
+                            catch (Exception e)
+                            {
+                                Plugin.LogSource.LogWarning("[MaydayCareer] 移除升级 " + owned + " 失败: " + e.Message);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 升级回退失败: " + e.Message); }
+            if (removedUpg > 0)
+                Plugin.LogSource.LogInfo("[MaydayCareer] 升级回退：移除 " + removedUpg + " 项（存档里没有）");
+
+            _restoreWaitRebuild = airportBefore >= 0 && airportBefore != s.currentAirport;
+            if (_restoreWaitRebuild)
+                Plugin.LogSource.LogInfo("[MaydayCareer] 存档机场（机场" + s.currentAirport
+                    + "）与会话机场（机场" + airportBefore + "）不同：物品还原会等世界重建完成后再做一次");
 
             // 进度字段：都是 SyncVar 属性，直接写会标脏并同步给客户端。
             // 逐个 try，某个失败不影响其他字段。
@@ -1449,13 +1634,12 @@ namespace MaydayCareer
         }
 
         /// <summary>
-        /// 手动存盘入口（热键用）。
+        /// 手动存盘入口。返回 null = 已提交写盘；否则 = 跳过原因（菜单按钮会显示给玩家）。
         ///
-        /// 和自动存盘的区别只有两处守卫：必须处在服务端，且 GameState 已就绪。
-        /// 纯客户端按热键时只打警告，绝不写盘 —— 否则客户端会用自己那份
-        /// 不完整的状态覆盖房主的存档。
+        /// skipLegGuard=true 跳过 GuardSave —— 选档界面专用：那里的覆盖
+        /// 已经过了二次确认，是明确操作；热键 J 没有确认环节，保持拦截。
         /// </summary>
-        public static void SaveManual()
+        public static string SaveManual(bool skipLegGuard = false)
         {
             try
             {
@@ -1466,20 +1650,21 @@ namespace MaydayCareer
                 {
                     Plugin.LogSource.LogWarning(
                         "[MaydayCareer] 手动存盘跳过：当前不是房主/服务端（纯客户端不写盘）");
-                    return;
+                    return "只有房主能存盘（纯客户端不写盘）";
                 }
 
                 if (global::Mayday.GameState.Instance == null)
                 {
                     Plugin.LogSource.LogWarning("[MaydayCareer] 手动存盘跳过：GameState 还没就绪");
-                    return;
+                    return "GameState 还没就绪";
                 }
 
-                Save();
+                return TrySave(skipLegGuard);
             }
             catch (Exception e)
             {
                 Plugin.LogSource.LogError("[MaydayCareer] 手动存盘异常: " + e);
+                return "存盘异常：" + e.Message;
             }
         }
 
@@ -2162,11 +2347,17 @@ namespace MaydayCareer
 
         // ---------- 世界物品：读 ----------
 
-        const int MaxRestoreTries = 3;
+        const int MaxRestoreTries = 5;
 
         static List<ItemRecord> _pendingItems;
         static bool _restorePending;
         static int _restoreTries;
+
+        // 读档机场与会话机场不同时置 true：改 CurrentAirport 会触发游戏重建世界
+        // （ServerResetForNewRun + 站点重锚），第一次还原的物品必被清掉。
+        // 置 true 期间"成功"不清 _restorePending，等重建完的 ServerReanchor
+        // 再还原一次到新世界里（OnSiteReanchored 会把本标记复位）。
+        static bool _restoreWaitRebuild;
 
         /// <summary>
         /// 读档后立刻尝试补物品；同时把"待补"标记挂上，
@@ -2204,12 +2395,20 @@ namespace MaydayCareer
         {
             if (!_restorePending) return;
             if (_restoreTries >= MaxRestoreTries) return;
+            // 注意：世界重建链的顺序是 重锚在前、ServerResetForNewRun 在最后。
+            // 跨机场读档时这次还原仍会被随后的重置清掉，所以这里不清
+            // _restoreWaitRebuild / _restorePending —— 最终还原在
+            // OnRunResetCleared（新一轮重置之后）收尾。
             RestoreItems(_pendingItems);
         }
 
         /// <summary>
-        /// 按存档补物品。幂等：先数场景里已有的同 id 物品，只补差额，
-        /// 所以反复读档不会刷物品。
+        /// 按存档精确还原物品：先清空场景里所有可持久化物品，
+        /// 再按存档原样重建 —— 机舱最终状态 = 存档状态。
+        ///
+        /// 之前是"补差"（数已有同 id，只补缺的）：读档后场景里多出来的物品
+        /// （上一局残留、官方开新档不清场的 bug）永远留在机上，用户反馈
+        /// "读档时已有的物品不会消失"。清空+重建从根上解决。
         /// </summary>
         static void RestoreItems(List<ItemRecord> want)
         {
@@ -2218,22 +2417,16 @@ namespace MaydayCareer
             {
                 if (want == null || want.Count == 0) { _restorePending = false; return; }
 
+                // 清空 tracked 物品（手持物跳过 —— 玩家手里的东西不该被抽走）
+                ClearWorldItems("读档精确还原");
+
                 var sockets = IndexSockets();
-                var have = CountItemsById();
 
                 int ok = 0, spawnFail = 0, socketMiss = 0;
 
                 foreach (var r in want)
                 {
                     if (r == null || string.IsNullOrEmpty(r.id)) { continue; }
-
-                    // 已经有一件了 → 不重复生成
-                    if (have.TryGetValue(r.id, out var n) && n > 0)
-                    {
-                        have[r.id] = n - 1;
-                        ok++;
-                        continue;
-                    }
 
                     try
                     {
@@ -2277,8 +2470,16 @@ namespace MaydayCareer
                     "[MaydayCareer] 物品重建 成功 {0} / 目标 {1}，socket 未命中 {2}（生成失败 {3}，第 {4} 次）",
                     ok, want.Count, socketMiss, spawnFail, _restoreTries));
 
-                // 全齐了就不再重试；否则留给下一次 GroundCrew 重锚再补
-                if (ok >= want.Count) _restorePending = false;
+                // 全齐了才考虑不再重试；否则留给下一次 GroundCrew 重锚再补。
+                // 但存档机场 ≠ 会话机场时，这次还原注定会被世界重建清掉 ——
+                // 保持 _restorePending，等重建完的 ServerReanchor 再还原一次。
+                if (ok >= want.Count)
+                {
+                    if (_restoreWaitRebuild)
+                        Plugin.LogSource.LogInfo("[MaydayCareer] 物品已还原，但世界即将按存档机场重建 —— 等重锚后再还原一次");
+                    else
+                        _restorePending = false;
+                }
             }
             catch (Exception e)
             {
@@ -2312,30 +2513,100 @@ namespace MaydayCareer
             return map;
         }
 
-        /// <summary>场景里现有物品按 itemId 计数（不做过滤，宁可少补也不要重复）。</summary>
-        static Dictionary<string, int> CountItemsById()
+        /// <summary>
+        /// 清空场景里所有可持久化物品（分类白名单内、非手持）。
+        /// 用于读档精确还原和新一轮清场。手持物跳过 —— 玩家手里的东西不该被抽走。
+        /// </summary>
+        static int ClearWorldItems(string why)
         {
-            var map = new Dictionary<string, int>(StringComparer.Ordinal);
+            int n = 0;
             try
             {
                 var arr = UnityEngine.Object.FindObjectsOfType<global::Mayday.Item>();
-                if (arr == null) return map;
+                if (arr == null) return 0;
                 for (int i = 0; i < arr.Length; i++)
                 {
                     var it = arr[i];
                     if (it == null) continue;
-                    string id = null;
-                    try { id = it.itemId; } catch { }
-                    if (string.IsNullOrEmpty(id)) continue;
-                    map.TryGetValue(id, out var c);
-                    map[id] = c + 1;
+                    if (!IsPersistable(it)) continue;
+                    try { it.ServerDestroy(); n++; }
+                    catch (Exception e)
+                    {
+                        Plugin.LogSource.LogWarning("[MaydayCareer] 删除物品失败（" + why + "）: " + e.Message);
+                    }
                 }
             }
             catch (Exception e)
             {
-                Plugin.LogSource.LogWarning("[MaydayCareer] 统计现有物品失败: " + e.Message);
+                Plugin.LogSource.LogWarning("[MaydayCareer] 清空物品异常（" + why + "）: " + e.Message);
             }
-            return map;
+            if (n > 0) Plugin.LogSource.LogInfo("[MaydayCareer] 已清空 " + n + " 件物品（" + why + "）");
+            return n;
+        }
+
+        /// <summary>
+        /// 新一轮重置时清场：仅限新公司（Leg==0）—— 坠机/重开进新公司时，
+        /// 官方不清上一局残留物品（社区反馈过的 bug），我们清掉并补一份
+        /// 全新开局 kit。普通换段（Leg≥1）物品按官方行为保留，绝不清。
+        ///
+        /// 注意重建链顺序：读档机场切换时的世界重建 = 重锚在前、
+        /// ServerResetForNewRun 在最后 —— 所以跨机场读档的最终物品还原
+        /// 挂在本方法之后（见 OnRunResetCleared），不挂重锚。
+        /// </summary>
+        public static void ClearItemsOnRunReset(string why)
+        {
+            if (!Plugin.ClearItemsOnNewRun.Value) return;
+            try
+            {
+                int leg = -1;
+                try { leg = global::Mayday.GameState.Instance?.Leg ?? -1; } catch { }
+                if (leg != 0)
+                {
+                    // 普通换段 / 会话中：物品保留，不清
+                    return;
+                }
+
+                int removed = ClearWorldItems(why);
+                if (removed <= 0) return; // 本来就干净，别去动 kit
+
+                try
+                {
+                    var sd = UnityEngine.Object.FindObjectOfType<global::Mayday.Service.ServiceDirector>();
+                    if (sd != null)
+                    {
+                        sd.ServerSpawnKit(false);
+                        Plugin.LogSource.LogInfo("[MaydayCareer] 已重新生成开局 kit（" + why + "）");
+                    }
+                }
+                catch (Exception e)
+                {
+                    Plugin.LogSource.LogWarning("[MaydayCareer] 重新生成开局 kit 失败（" + why + "）: " + e.Message);
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 新一轮清场异常（" + why + "）: " + e.Message);
+            }
+        }
+
+        /// <summary>
+        /// 新一轮重置链跑完后的收尾：如果还有待还原的物品（跨机场读档场景），
+        /// 在这里做最终还原 —— 此时的世界就是最终世界，不会再被重建清掉。
+        /// </summary>
+        public static void OnRunResetCleared()
+        {
+            if (!_restorePending || _pendingItems == null || _pendingItems.Count == 0) return;
+            if (_restoreTries >= MaxRestoreTries) return;
+            try
+            {
+                Plugin.LogSource.LogInfo("[MaydayCareer] 新一轮重置完成 —— 在最终世界里还原物品");
+                _restoreWaitRebuild = false;
+                RestoreItems(_pendingItems);
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogError("[MaydayCareer] 最终物品还原异常: " + e);
+            }
         }
 
         static global::Mayday.Item SpawnOne(ItemRecord r)

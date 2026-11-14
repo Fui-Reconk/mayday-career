@@ -21,9 +21,10 @@ namespace MaydayCareer
     {
         public const string Guid = "local.mayday.career";
         public const string Name = "Mayday Career Save";
-        public const string Version = "1.2.0";
+        public const string Version = "1.3.0";
 
         internal static ManualLogSource LogSource;
+        internal static BepInEx.Configuration.ConfigFile ConfigRef; // 运行时写档位选择后 Save 用
         internal static ConfigEntry<bool> AutoSave;
         internal static ConfigEntry<bool> ClearBeforeLoad;
         internal static ConfigEntry<bool> Verbose;
@@ -43,10 +44,15 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> GuardSave;
         internal static ConfigEntry<string> SaveKey;
         internal static ConfigEntry<bool> PerfWatch;
+        internal static ConfigEntry<bool> MenuButtons;
+        internal static ConfigEntry<int> SaveSlots;
+        internal static ConfigEntry<int> ActiveSlot;
+        internal static ConfigEntry<bool> ClearItemsOnNewRun;
 
         public override void Load()
         {
             LogSource = base.Log;
+            ConfigRef = Config;
 
             AutoSave = Config.Bind(
                 "General",
@@ -171,6 +177,36 @@ namespace MaydayCareer
                 "开销可忽略（每帧一次浮点比较）；没有卡顿的窗口不写任何日志。\n" +
                 "确认过原因后可以关掉。");
 
+            MenuButtons = Config.Bind(
+                "General",
+                "MenuButtons",
+                true,
+                "在暂停菜单（ESC）里加「存盘 / 读档」两个按钮，样式与游戏原按钮一致。\n" +
+                "点按钮的效果和按热键一样；按钮下方会弹游戏自带的通知条做反馈。");
+
+            SaveSlots = Config.Bind(
+                "General",
+                "SaveSlots",
+                3,
+                new BepInEx.Configuration.ConfigDescription(
+                    "存档档位数（1-6）。档1 是主档 career.json（兼容旧档）；档2+ 各自是独立文件 career.slotN.json。\n" +
+                    "暂停菜单的「档位」按钮循环切换，存盘/读档/热键都作用于当前档位。",
+                    new BepInEx.Configuration.AcceptableValueRange<int>(1, 6)));
+
+            ActiveSlot = Config.Bind(
+                "General",
+                "ActiveSlot",
+                1,
+                "上次使用的档位（菜单按钮切换时自动写回，一般不用手改）。");
+
+            ClearItemsOnNewRun = Config.Bind(
+                "General",
+                "ClearItemsOnNewRun",
+                true,
+                "新一轮重置 / 手动重开时清空上一局残留的物品，并重新生成一份全新的开局 kit。\n" +
+                "官方开新档不清场（社区反馈过的 bug），开着这项可以修掉；\n" +
+                "读档本身永远是精确还原（先清空再按存档重建），与这项无关。");
+
             LogSource.LogInfo("[MaydayCareer] 已加载 v" + Version);
 
             var harmony = new Harmony(Guid);
@@ -178,6 +214,7 @@ namespace MaydayCareer
 
             LogSource.LogInfo("[MaydayCareer] 补丁数 = " + harmony.GetPatchedMethods().Count());
             CareerStore.Init();
+            CareerStore.SetActiveSlot(ActiveSlot.Value); // 恢复上次使用的档位
             global::MaydayCareer.PerfWatch.Configure(PerfWatch.Value);
         }
     }

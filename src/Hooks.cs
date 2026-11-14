@@ -17,7 +17,7 @@ namespace MaydayCareer
         private static void Postfix()
         {
             if (!Plugin.AutoSave.Value) return;
-            try { CareerStore.Save(); }
+            try { CareerStore.AutoSave(); }
             catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 存盘异常: " + e); }
         }
     }
@@ -33,7 +33,7 @@ namespace MaydayCareer
         private static void Postfix()
         {
             if (!Plugin.AutoSave.Value) return;
-            try { CareerStore.Save(); }
+            try { CareerStore.AutoSave(); }
             catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 存盘异常: " + e); }
         }
     }
@@ -79,7 +79,7 @@ namespace MaydayCareer
                     // 落地 / 下一段周转：都是成功飞行之后，可以安全存盘。
                     case global::Mayday.Airport.DirectorStage.Arrived:
                     case global::Mayday.Airport.DirectorStage.Turnaround:
-                        if (Plugin.AutoSave.Value) CareerStore.Save();
+                        if (Plugin.AutoSave.Value) CareerStore.AutoSave();
                         break;
 
                     // 坠机轮结束：默认不存。
@@ -87,7 +87,7 @@ namespace MaydayCareer
                     // 在这里存盘等于把"一轮作废"改成"检查点"，而且会当场污染下一轮。
                     // 想让坠机也计入生涯的，把配置里的 SaveOnCrash 打开。
                     case global::Mayday.Airport.DirectorStage.GameOver:
-                        if (Plugin.AutoSave.Value && Plugin.SaveOnCrash.Value) CareerStore.Save();
+                        if (Plugin.AutoSave.Value && Plugin.SaveOnCrash.Value) CareerStore.AutoSave();
                         else Plugin.LogSource.LogInfo("[MaydayCareer] 坠机，按设置不覆盖存档");
                         break;
                 }
@@ -101,6 +101,7 @@ namespace MaydayCareer
 
     /// <summary>
     /// 手动重开一轮时清除一次性标记，让读档可以再执行一次。
+    /// 同时清空上一轮残留的物品并补全新开局 kit。
     /// </summary>
     [HarmonyPatch]
     internal static class RestartHook
@@ -111,6 +112,9 @@ namespace MaydayCareer
         {
             CareerStore.ResetApplyFlag();
             if (Plugin.AutoLoadOnStart.Value) CareerStore.ApplyOnce();
+
+            try { CareerStore.ClearItemsOnRunReset("手动重开"); }
+            catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 手动重开清场异常: " + e); }
         }
     }
 
@@ -202,6 +206,15 @@ namespace MaydayCareer
         {
             try { CareerStore.EnsureSavedSeats("新一轮重置"); }
             catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 新一轮重置后补座排异常: " + e); }
+
+            // 官方开新档不清场：仅新公司（Leg=0）清残留 + 补全新 kit
+            try { CareerStore.ClearItemsOnRunReset("新一轮重置"); }
+            catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 新一轮重置清场异常: " + e); }
+
+            // 跨机场读档：世界重建链的最后一环是 ServerResetForNewRun，
+            // 在这里做最终的物品还原（此时世界不会再被清）
+            try { CareerStore.OnRunResetCleared(); }
+            catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 重置后物品还原异常: " + e); }
         }
     }
 
