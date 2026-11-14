@@ -152,8 +152,15 @@ namespace MaydayCareer
                 if (mouse != null)
                 {
                     Vector2 delta = mouse.scroll.ReadValue();
-                    // 一格滚轮 ≈ 一行（Windows 滚轮一格 120，行距 108）
-                    if (delta.y != 0f) ScrollBy(-delta.y * 0.9f);
+                    // 灵敏度：一格标准滚轮（120）≈ 4.4 行；不同鼠标的单格增量差异很大
+                    //（高分辨率的平滑滚轮单帧增量很小），保底每次事件至少滚 2 行
+                    if (delta.y != 0f)
+                    {
+                        float step = delta.y * 4f;
+                        if (Math.Abs(step) < RowStep * 1.5f)
+                            step = Math.Sign(delta.y) * RowStep * 2f;
+                        ScrollBy(-step);
+                    }
                 }
             }
             catch (Exception e)
