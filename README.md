@@ -28,7 +28,7 @@
 | 累计收入 / 累计乘客 | `GameState.TotalEarned` / `TotalPassengers` |
 | 已购升级 | `GameState.Upgrades`（`SyncList<string>`） |
 | 座位排数 | `PassengerDirector.rowMask` 位图 |
-| 燃油 | `FuelSystem.tank[]` 左右箱 + 储备油（**绝对升数**，不是比例） |
+| 燃油 | `FuelSystem.tank[]` 左右箱 + 储备油 |
 | 发动机 | 每台的 `state` / `faults` / `rpm` / `cowl` / 机油量 |
 | 机体损伤 | `HullSystem` per-panel：每块面板的损伤/脏污/破洞/补丁进度 + 区段维修阶段（`sStage`/`sProg`） |
 | 机翼掉漆 | `shownMain/shownAccent` 外观链 + `paintCover`/`coverDamage`，写回后调 `ApplyAllSectionPaint` 重绘 |
@@ -243,22 +243,59 @@ BepInEx\config\local.mayday.career.cfg
     "money": 1311,
     "debt": 1200,
     "leg": 3,
+    "runSeed": -482,
     "currentAirport": 3,
+    "destinationAirport": 1,
+    "totalEarned": 5200,
+    "totalPassengers": 14,
     "rating": 2.8,
+    "difficulty": 1,
     "fuelL": 152.2,
     "fuelR": 152.2,
+    "reserveTank": 0,
+    "reserveSync": 0,
+    "fuelCapacity": 160,
     "tanks": [152.2, 152.2],
-    "paintCover": [1, 0.42, 1, 1, ...],
+    "hull": {
+        "breaches": 0,
+        "sectSync": "0",
+        "panels": [
+            { "damage": 0, "netDamage": 0, "dirt": 0.07, "netDirt": 0.07, "hole": [0, 0, 0, 0], "patchT": 0 }
+        ],
+        "sections": [
+            { "stage": 0, "progress": 1 }
+        ],
+        "paint": [
+            {
+                "main": [255, 255, 255, 255], "accent": [40, 90, 160, 255],
+                "netMain": [255, 255, 255, 255], "netAccent": [40, 90, 160, 255],
+                "shownMain": [255, 255, 255, 255], "shownAccent": [40, 90, 160, 255],
+                "goalMain": [255, 255, 255, 255], "goalAccent": [40, 90, 160, 255],
+                "glideMain": 1, "glideAccent": 1,
+                "cover": 1, "coverDamage": 0
+            }
+        ]
+    },
     "engines": [
-        { "index": 0, "state": 1, "faults": 0, "rpm": 2100, "oil": 0.9 }
+        { "index": 0, "state": 0, "faults": 0, "cowl": 0, "bat": 1, "swap": 0, "swapSerial": 0,
+          "rpm": 0, "oil": 1, "lOil": 1, "temp": 0.08, "fire": 0, "batt": 1, "swapP": 0 }
     ],
     "upgrades": ["seat_premium", "espresso"],
     "seatRowMask": 255,
+    "seatRowCount": 8,
+    "seatRows": [0, 1, 2, 3, 4, 5, 6, 7],
     "items": [
-        { "id": "extinguisher", "socket": "Plane#0/Cabin#3/Socket#0", "px": 1.5, ... }
+        {
+            "id": "fuse", "tint": -1, "amount": 0, "count": 0, "tag": 0,
+            "socket": "Plane#0/PlaneSystems#1/Sys#2/CargoBay#0/BreakerPanel#1/FuseSocket_0#0",
+            "px": -1.93, "py": 2.9, "pz": -6.5,
+            "rx": 0, "ry": 0.707, "rz": 0, "rw": 0.707
+        }
     ]
 }
 ```
+
+各数组的含义：`tanks` 是按索引的油箱模拟值；`hull.panels` 是逐面板的损伤/脏污/破洞；`hull.sections` 是三段修复的阶段与进度；`hull.paint` 是每块面板的喷漆外观链（`shown*` 才是渲染读取的）；`seatRows` 是已装座排的编号列表；`items` 里 `socket` 是插槽的层级路径（找不回插槽时按 `px/py/pz` 世界坐标摆放）。
 
 ### 常用操作
 
@@ -379,7 +416,7 @@ dotnet run Inspector.cs "C:\...\BepInEx\interop\Assembly-CSharp.dll" find "FuelL
 - 物品只存客舱 / 货舱里的**实体**，行李和手持物不存
 - 读档为**精确还原**：先清空场景里的可持久化物品再按存档重建，所以读档会清掉你本局新买的、存档里没有的器材（读档前想保留就先存一份）
 - 多人时其他玩家**手里拿着的**物品不会被清（避免从手中抽走），读档后可能出现同 id 的手上物 + 存档物并存
-- 升级台账会精确回退（本局多买的会被移除）；但**座排没有卸载 API**，读"排数更少"的档时多装的排不会消失
+- 升级台账会精确回退（本局多买的会被移除）；座排也会随存档对齐——读"排数更少"的档时多装的排会正常消失
 - 物品的 `tag` 只记录不还原 —— 那是运行时网络句柄，重新生成必然是新值
 - 发动机保证 `state` / `faults` 准确；机油量已验证能留住，温度等纯模拟量会在几秒内回归正常值
 - 机翼掉漆走的是完整外观链（`shownMain/shownAccent` + `paintCover/coverDamage`），写回后调 `ApplyAllSectionPaint` + `MarkAllDirty` 重绘。若日志出现 `写 holes 失败`，说明当前 interop 版本对 `SyncList<Vector4>` 索引器支持有问题 —— 损伤与掉漆仍会还原，只是洞的位置可能不在原处
@@ -446,7 +483,7 @@ Item.ServerSpawn / ServerDestroy  物品重建与精确还原
 - [BepInEx](https://github.com/BepInEx/BepInEx) —— IL2CPP 插件框架
 - [HarmonyX](https://github.com/BepInEx/HarmonyX) —— 运行时方法补丁
 - [CHmadoka/more_players](https://github.com/CHmadoka/more_players) —— 同款游戏的人数扩展 mod，本项目参考了它的工程结构和风险提示写法
-- [LS3213/Mayday-Mod-Manager](https://github.com/LS3213/Mayday-Mod-Manager) —— 同游戏的模组管理器与存档模组。v1.1.0 的机体损伤/掉漆字段映射参考了它的发布文档与反编译产物（仅学习方法，未复制代码）
+- [LS3213/Mayday-Mod-Manager](https://github.com/LS3213/Mayday-Mod-Manager) —— 同游戏的模组管理器与存档模组
 
 ## 许可证
 
