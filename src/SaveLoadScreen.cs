@@ -396,6 +396,9 @@ namespace MaydayCareer
 
             var content = new GameObject("Content");
             content.transform.SetParent(viewport.transform, false);
+            // 裸 GameObject 的 transform 是普通 Transform 不是 RectTransform
+            //（之前靠紧跟的布局组组件隐式升级，删掉布局组后这里 NRE）—— 显式补上
+            content.AddComponent<UnityEngine.RectTransform>();
             _contentRect = content.transform.TryCast<UnityEngine.RectTransform>();
             _contentRect.anchorMin = new Vector2(0f, 1f);   // 顶部锚定，向下生长
             _contentRect.anchorMax = new Vector2(1f, 1f);
