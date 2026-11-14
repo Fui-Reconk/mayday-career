@@ -110,26 +110,59 @@ namespace MaydayCareer
             }
         }
 
-        /// <summary>每帧轮询：ESC 关界面；滚轮滚行区（自研滚动，不依赖 ScrollRect）。</summary>
+        // 鼠标滚轮诊断：只打一次，确认 InputSystem 的 Mouse 路径是否可用
+        static bool _mouseDiagLogged;
+
+        /// <summary>每帧轮询：ESC 关界面；滚轮/方向键/PageUp·Down 滚行区（自研滚动，不依赖 ScrollRect）。</summary>
         public static void PollEsc()
         {
             if (!IsOpen) return;
+
+            // ESC 关界面（独立 try：某个键位枚举缺失不能连累它）
             try
             {
                 var kb = UnityEngine.InputSystem.Keyboard.current;
-                if (kb != null && kb.escapeKey.wasPressedThisFrame) Close();
+                if (kb != null && kb.escapeKey.wasPressedThisFrame) { Close(); return; }
             }
             catch { }
+
+            // 键盘滚动兜底：Keyboard.current 路径实测可靠（热键就在用）
+            try
+            {
+                var kb = UnityEngine.InputSystem.Keyboard.current;
+                if (kb != null)
+                {
+                    float keyStep = 0f;
+                    try { if (kb.pageUpKey.wasPressedThisFrame || kb.upArrowKey.wasPressedThisFrame) keyStep = -RowStep * 2f; } catch { }
+                    try { if (kb.pageDownKey.wasPressedThisFrame || kb.downArrowKey.wasPressedThisFrame) keyStep = RowStep * 2f; } catch { }
+                    if (keyStep != 0f) ScrollBy(keyStep);
+                }
+            }
+            catch { }
+
+            // 鼠标滚轮
             try
             {
                 var mouse = UnityEngine.InputSystem.Mouse.current;
+                if (!_mouseDiagLogged)
+                {
+                    _mouseDiagLogged = true;
+                    Plugin.LogSource.LogInfo("[MaydayCareer] 滚轮诊断：Mouse.current=" + (mouse != null ? "有" : "null"));
+                }
                 if (mouse != null)
                 {
                     Vector2 delta = mouse.scroll.ReadValue();
                     if (delta.y != 0f) ScrollBy(-delta.y * 0.4f);
                 }
             }
-            catch { }
+            catch (Exception e)
+            {
+                if (!_mouseDiagLogged)
+                {
+                    _mouseDiagLogged = true;
+                    Plugin.LogSource.LogWarning("[MaydayCareer] 滚轮路径不可用（可用方向键/PageUp·Down 滚动）: " + e.Message);
+                }
+            }
         }
 
         /// <summary>滚动行区：位移钳制在 [0, 最大可滚距离]，同步行可见性（虚拟化裁剪）与滚动条把手。</summary>
@@ -148,12 +181,14 @@ namespace MaydayCareer
                 _scrollOffset = Math.Max(0f, Math.Min(_maxScroll, _scrollOffset));
                 _contentRect.anchoredPosition = new Vector2(0f, _scrollOffset);
 
-                // 虚拟化裁剪：视口外的行直接隐藏（没有 RectMask2D 也不会溢出面板）
+                // 虚拟化裁剪：视口外的行直接隐藏（没有 RectMask2D 也不会溢出面板）。
+                // 行 i 的顶边距视口顶部 = i*RowStep - offset（offset 增大 = 内容上移露出下面的行）。
+                // 超出 SaveSlots 的行（档位数收缩隐藏的）不参与。
                 for (int i = 0; i < _rows.Count; i++)
                 {
-                    if (!_rows[i].go.activeSelf) continue; // 档位数收缩隐藏的行不碰
-                    float top = _scrollOffset - i * RowStep;
-                    bool vis = top > -RowH && top < _viewportH + RowH;
+                    if (i > CareerStore.SlotCount) continue;
+                    float rowTop = i * RowStep - _scrollOffset;
+                    bool vis = rowTop < _viewportH && rowTop + RowH > 0f;
                     if (_rows[i].go.activeSelf != vis) _rows[i].go.SetActive(vis);
                 }
 
