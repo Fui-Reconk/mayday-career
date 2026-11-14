@@ -489,7 +489,7 @@ namespace MaydayCareer
 
         public const int AutoSlot = 0;
 
-        public static int SlotCount => Math.Max(1, Math.Min(6, Plugin.SaveSlots?.Value ?? 3));
+        public static int SlotCount => Math.Max(1, Math.Min(12, Plugin.SaveSlots?.Value ?? 3));
 
         public static void SetActiveSlot(int slot)
         {
@@ -566,7 +566,7 @@ namespace MaydayCareer
         static int[] EnsureLegCache()
         {
             if (_cachedLegs == null)
-                _cachedLegs = new int[8]; // 档位数上限 6，留些余量
+                _cachedLegs = new int[16]; // 档位数上限 12，留些余量
             for (int i = 0; i < _cachedLegs.Length && i <= SlotCount; i++)
                 if (i > 0 && _cachedLegs[i] == 0) _cachedLegs[i] = -2;
             return _cachedLegs;

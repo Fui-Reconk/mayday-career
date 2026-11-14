@@ -7,47 +7,72 @@ using UnityEngine.UI;
 namespace MaydayCareer
 {
     /// <summary>
-    /// 选档界面开着时拦截游戏的 ESC（UIRoot.HandleBack）：
-    /// 只关选档界面，游戏的菜单栈不动 —— 否则 ESC 会把底下的暂停菜单
-    /// 一起退掉，选档界面却还挂着（用户反馈）。
+    /// 选档界面开着时拦截游戏的返回/关闭路径（ESC 的多个可能入口）：
+    ///   1. UIRoot.HandleBack —— 游戏返回按钮逻辑
+    ///   2. UIScreen.Back / Close / CloseInstant —— ESC 关暂停菜单最终落到这里
+    ///   3. UIRoot.Update —— 整个跳过（游戏的输入轮询在里面，轮询不到 ESC 就不会反应）
+    /// 再配合 SaveLoadScreen 自己的 ESC 轮询（关选档界面）+ 帧抑制
+    /// （Close 记录 frameCount，当帧所有前缀都拦截，杜绝执行顺序竞态）。
     /// </summary>
     [HarmonyPatch]
     internal static class EscapeHook
     {
         [HarmonyPrefix]
         [HarmonyPatch(typeof(global::Mayday.UI.UIRoot), "HandleBack")]
-        private static bool Prefix()
+        private static bool HandleBackPrefix()
         {
-            if (!SaveLoadScreen.IsOpen) return true; // 平时放行，游戏自己处理
+            if (!SaveLoadScreen.ShouldBlockGameBack) return true;
             SaveLoadScreen.Close();
-            return false; // 跳过游戏原逻辑
+            return false;
         }
+
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(global::Mayday.UI.UIRoot), "Update")]
+        private static bool UIRootUpdatePrefix()
+        {
+            // 选档界面是模态：冻结 UIRoot 的输入轮询，游戏的 ESC 反应不过来。
+            // 通知条/界面动画也走这里，界面开着时会暂停刷新 —— 可接受。
+            return !SaveLoadScreen.IsOpen;
+        }
+
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(global::Mayday.UI.UIScreen), "Back")]
+        private static bool ScreenBackPrefix() => !SaveLoadScreen.ShouldBlockGameBack;
+
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(global::Mayday.UI.UIScreen), "Close")]
+        private static bool ScreenClosePrefix() => !SaveLoadScreen.ShouldBlockGameBack;
+
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(global::Mayday.UI.UIScreen), "CloseInstant")]
+        private static bool ScreenCloseInstantPrefix() => !SaveLoadScreen.ShouldBlockGameBack;
     }
+
     /// <summary>
     /// galgame 式存读档界面（T-MOD-011 的进阶形态）。
     ///
     /// 点暂停菜单的「存盘 / 读档」后弹出全屏选档面板：
-    ///   - 列出档 1..SaveSlots，每行显示该档的存档时间 / 段数 / 金钱（空档标注）
-    ///   - 存盘模式：点行 = 把当前进度写入该档（GuardSave 照常生效）
-    ///   - 读档模式：点行 = 把该档读入当前进度
-    ///   - 底部「关闭」或点击四周暗幕关闭
+    ///   - 第一行 = 自动存档（读档可选，存盘灰显不可写）
+    ///   - 档 1..SaveSlots 每行显示存档时间 / 段数 / 金钱（空档标注）
+    ///   - 存盘模式点已有数据的档位 → 二次确认（行变橙再点执行）
+    ///   - 档位多时行区滚动（ScrollRect + 布局组），滚轮/拖拽/滚动条都可用
+    ///   - ESC / 底部「关闭」/ 点击暗幕 关闭；ESC 只关本界面，暂停菜单不动
     ///
     /// 实现说明（IL2CPP 下的约束与对策）：
-    ///   - 不能自定义 MonoBehaviour 子类，所以整棵 UI 树全用现成的 il2cpp
-    ///     组件拼出来：Canvas / CanvasScaler / GraphicRaycaster / Image /
-    ///     Button / Text，全部 AddComponent 到我们自己的 GameObject 上
-    ///   - 游戏文字走 TMP，其字体资产不好从外部取；这里用系统字体
-    ///     （微软雅黑，Font.CreateDynamicFontFromOSFont），Windows 上必有，
-    ///     中文渲染零风险
-    ///   - 行点击用 uGUI Button.onClick（UnityEvent），
-    ///     AddListener 经 DelegateSupport 封送托管委托
-    ///   - 独立 Canvas（sortOrder 3000）悬浮在游戏 UI 之上，
-    ///     不参与游戏的 UIScreen 栈，开闭就是 SetActive
+    ///   - 不能自定义 MonoBehaviour，整棵 UI 树用现成 il2cpp 组件拼：
+    ///     Canvas / CanvasScaler / GraphicRaycaster / Image / Button / Text /
+    ///     ScrollRect / Scrollbar / VerticalLayoutGroup / ContentSizeFitter
+    ///   - 文字用系统字体（微软雅黑，单名重载的 CreateDynamicFontFromOSFont
+    ///     —— string[] 重载在部分 interop 里缺方法），Windows 中文零风险
+    ///   - 行点击：uGUI Button.onClick，AddListener 经 DelegateSupport 封送
+    ///   - 独立 Canvas（sortOrder 3000），不参与游戏的 UIScreen 栈
     /// </summary>
     internal static class SaveLoadScreen
     {
         const float RefW = 1920f, RefH = 1080f;
-        const float RowH = 96f, RowStep = 108f, RowGap = 40f;
+        const float RowH = 96f, RowGap = 12f;
+        const float RowStep = RowH + RowGap;      // 布局组的行距（行高 + 间距）
+        const float PanelMaxH = 980f; // 面板最大高度：超出部分靠滚动，不撑爆屏幕
 
         static GameObject _root;        // Canvas 根（场景切换会被销毁，销毁后重建）
         static Text _title;
@@ -55,6 +80,10 @@ namespace MaydayCareer
         static readonly List<Row> _rows = new List<Row>();
         static bool _saveMode;
         static int _builtRows = -1;
+
+        // ESC 帧抑制：Close 记录当前帧号，该帧内游戏的所有返回/关闭路径都拦截，
+        // 无论游戏输入轮询和插件轮询谁先跑（见 EscapeHook.ShouldBlockGameBack）
+        static int _lastCloseFrame = -1;
 
         sealed class Row
         {
@@ -65,8 +94,27 @@ namespace MaydayCareer
 
         public static bool IsOpen => _root != null && _root.activeSelf;
 
-        // 二次确认状态：_armedSlot = 已点过一次、等待确认的档位（0 = 无）
-        static int _armedSlot;
+        /// <summary>游戏的返回/关闭逻辑要不要拦截（界面开着，或 ESC 刚关掉界面的那一帧）。</summary>
+        public static bool ShouldBlockGameBack
+        {
+            get
+            {
+                try { return IsOpen || UnityEngine.Time.frameCount == _lastCloseFrame; }
+                catch { return false; }
+            }
+        }
+
+        /// <summary>每帧轮询：界面开着时按 ESC = 关界面（游戏侧被 EscapeHook 拦住，不会动菜单）。</summary>
+        public static void PollEsc()
+        {
+            if (!IsOpen) return;
+            try
+            {
+                var kb = UnityEngine.InputSystem.Keyboard.current;
+                if (kb != null && kb.escapeKey.wasPressedThisFrame) Close();
+            }
+            catch { }
+        }
 
         /// <summary>打开选档面板。saveMode=true 存盘模式，false 读档模式。</summary>
         public static void Open(bool saveMode)
@@ -100,10 +148,20 @@ namespace MaydayCareer
 
         public static void Close()
         {
-            try { if (_root != null) _root.SetActive(false); }
+            try
+            {
+                if (_root != null && _root.activeSelf)
+                {
+                    _lastCloseFrame = UnityEngine.Time.frameCount;
+                    _root.SetActive(false);
+                }
+            }
             catch { }
             _armedSlot = 0;
         }
+
+        // 二次确认状态：_armedSlot = 已点过一次、等待确认的档位（0 = 无）
+        static int _armedSlot;
 
         static void FillRow(Row row, int slot, bool saveMode)
         {
@@ -207,8 +265,10 @@ namespace MaydayCareer
             var dimBtn = dim.AddComponent<Button>();
             dimBtn.onClick.AddListener(Wrap(Close));
 
-            // 面板本体：行数 = 自动存档 1 行 + 手动档 N 行
-            float panelH = 340f + (CareerStore.SlotCount + 1) * RowStep;
+            // 面板本体：行多时高度封顶，靠滚动条看剩下的行
+            int manual = CareerStore.SlotCount;
+            float naturalH = 340f + (manual + 1) * RowStep;
+            float panelH = Math.Min(naturalH, PanelMaxH);
             var panel = NewImage(rt, "Panel", new Color(0.12f, 0.14f, 0.19f, 0.985f));
             var prt = panel.transform.TryCast<UnityEngine.RectTransform>();
             prt.sizeDelta = new Vector2(980f, panelH);
@@ -228,16 +288,51 @@ namespace MaydayCareer
             srt.anchoredPosition = new Vector2(0f, panelH / 2f - 103f);
             srt.sizeDelta = new Vector2(940f, 30f);
 
-            // 档位行：行 0 = 自动存档，行 1..N = 手动档位
-            int n = CareerStore.SlotCount + 1;
+            // 行滚动区：Viewport（RectMask2D 裁剪）+ Content（垂直布局组自动排行）
+            float viewportH = panelH - 240f; // 上下留出标题区和关闭按钮区
+            var viewport = NewImage(panel.transform, "Viewport", new Color(0f, 0f, 0f, 0f));
+            var vrt = viewport.transform.TryCast<UnityEngine.RectTransform>();
+            vrt.sizeDelta = new Vector2(860f, viewportH);
+            vrt.anchoredPosition = new Vector2(-16f, 0f); // 右侧留滚动条位置
+            viewport.AddComponent<RectMask2D>();
+
+            var scroll = viewport.AddComponent<ScrollRect>();
+            scroll.horizontal = false;
+            scroll.vertical = true;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 24f;
+
+            var content = new GameObject("Content");
+            content.transform.SetParent(viewport.transform, false);
+            var crt = content.transform.TryCast<UnityEngine.RectTransform>();
+            crt.anchorMin = new Vector2(0f, 1f);   // 顶部锚定，向下生长
+            crt.anchorMax = new Vector2(1f, 1f);
+            crt.pivot = new Vector2(0.5f, 1f);
+            crt.offsetMin = new Vector2(0f, 0f);
+            crt.offsetMax = new Vector2(0f, 0f);
+            var layout = content.AddComponent<VerticalLayoutGroup>();
+            layout.spacing = RowGap;
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            var fitter = content.AddComponent<ContentSizeFitter>();
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            scroll.content = crt;
+
+            // 档位行：行 0 = 自动存档，行 1..N = 手动档位（布局组自动排，不再手写坐标）
+            int n = manual + 1;
             _builtRows = n;
             for (int i = 0; i < n; i++)
             {
-                int slot = i; // 行号即档位号：0 = 自动存档，1..N = 手动档
-                var rowGo = NewImage(panel.transform, slot == CareerStore.AutoSlot ? "SlotAuto" : "Slot" + slot, new Color(0.20f, 0.23f, 0.31f, 1f));
+                int slot = i; // 闭包捕获：行号即档位号（0 = 自动存档）
+                var rowGo = NewImage(content.transform, slot == CareerStore.AutoSlot ? "SlotAuto" : "Slot" + slot, new Color(0.20f, 0.23f, 0.31f, 1f));
                 var rrt = rowGo.transform.TryCast<UnityEngine.RectTransform>();
-                rrt.sizeDelta = new Vector2(900f, RowH);
-                rrt.anchoredPosition = new Vector2(0f, panelH / 2f - 180f - i * RowStep);
+                rrt.sizeDelta = new Vector2(0f, RowH); // 宽交给布局组，高固定
+                var le = rowGo.AddComponent<LayoutElement>();
+                le.minHeight = RowH;
+                le.preferredHeight = RowH;
 
                 var btn = rowGo.AddComponent<Button>();
                 btn.targetGraphic = rowGo.GetComponent<Image>();
@@ -253,8 +348,7 @@ namespace MaydayCareer
                 };
 
                 var label = NewText(rowGo.transform, "Label", "", font, 30, new Color(0.92f, 0.94f, 0.98f, 1f));
-                var lrt = label.transform.TryCast<UnityEngine.RectTransform>();
-                Stretch(lrt);
+                Stretch(label.transform.TryCast<UnityEngine.RectTransform>());
                 label.alignment = TextAnchor.MiddleCenter;
 
                 var row = new Row { go = rowGo, label = label, button = btn };
@@ -262,11 +356,29 @@ namespace MaydayCareer
                 _rows.Add(row);
             }
 
+            // 滚动条（视觉件）：面板右缘，竖向
+            var sbGo = NewImage(panel.transform, "Scrollbar", new Color(0.25f, 0.28f, 0.35f, 0.9f));
+            var sbrt = sbGo.transform.TryCast<UnityEngine.RectTransform>();
+            sbrt.sizeDelta = new Vector2(14f, viewportH);
+            sbrt.anchoredPosition = new Vector2(490f - 24f, 0f);
+            var sb = sbGo.AddComponent<Scrollbar>();
+            sb.direction = Scrollbar.Direction.BottomToTop;
+            var handleGo = NewImage(sbGo.transform, "Handle", new Color(0.55f, 0.60f, 0.70f, 1f));
+            var hrt = handleGo.transform.TryCast<UnityEngine.RectTransform>();
+            hrt.anchorMin = new Vector2(0f, 0f);
+            hrt.anchorMax = new Vector2(1f, 0f);
+            hrt.pivot = new Vector2(0.5f, 0.5f);
+            sb.handleRect = hrt;
+            sb.targetGraphic = handleGo.GetComponent<Image>();
+            scroll.verticalScrollbar = sb;
+            scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+            scroll.verticalScrollbarSpacing = 3f;
+
             // 关闭按钮
             var closeGo = NewImage(panel.transform, "Close", new Color(0.35f, 0.38f, 0.45f, 1f));
-            var crt = closeGo.transform.TryCast<UnityEngine.RectTransform>();
-            crt.sizeDelta = new Vector2(220f, 64f);
-            crt.anchoredPosition = new Vector2(0f, -(panelH / 2f - 62f));
+            var clrt = closeGo.transform.TryCast<UnityEngine.RectTransform>();
+            clrt.sizeDelta = new Vector2(220f, 64f);
+            clrt.anchoredPosition = new Vector2(0f, -(panelH / 2f - 62f));
             var closeBtn = closeGo.AddComponent<Button>();
             closeBtn.targetGraphic = closeGo.GetComponent<Image>();
             var clabel = NewText(closeGo.transform, "Label", "关闭", font, 30, Color.white);
@@ -275,7 +387,7 @@ namespace MaydayCareer
             closeBtn.onClick.AddListener(Wrap(Close));
 
             rootGo.SetActive(false); // 构建完先藏起来，Open 再亮
-            Plugin.LogSource.LogInfo("[MaydayCareer] 构建选档界面: 完成（" + n + " 行）");
+            Plugin.LogSource.LogInfo("[MaydayCareer] 构建选档界面: 完成（自动 + " + manual + " 手动档，可视高 " + viewportH.ToString("F0") + "）");
         }
 
         /// <summary>行为委托 → UnityAction（UnityEvent.AddListener 的参数类型）。</summary>
@@ -396,17 +508,22 @@ namespace MaydayCareer
         }
 
         /// <summary>
-        /// 系统字体（微软雅黑）。Windows 上必有，中文渲染零风险；
-        /// 万一创建失败退回 Arial，再退回 Text 的默认字体（反正能点，字丑而已）。
+        /// 系统字体（微软雅黑）。必须用单名字符串重载 —— string[] 重载在
+        /// 部分 interop 里缺方法（实测 Method not found）。Windows 上必有，
+        /// 中文渲染零风险；万一创建失败退回 Arial，再退回 Text 的内置字体。
         /// </summary>
         static Font GetCjkFont()
         {
-            try
+            string[] names = { "Microsoft YaHei UI", "Microsoft YaHei", "微软雅黑", "SimHei" };
+            foreach (var nm in names)
             {
-                var f = Font.CreateDynamicFontFromOSFont(new string[] { "Microsoft YaHei UI", "Microsoft YaHei", "微软雅黑", "SimHei" }, 30);
-                if (f != null) return f;
+                try
+                {
+                    var f = Font.CreateDynamicFontFromOSFont(nm, 30);
+                    if (f != null) return f;
+                }
+                catch { }
             }
-            catch (Exception e) { Plugin.LogSource.LogWarning("[MaydayCareer] 创建系统字体失败: " + e.Message); }
             try
             {
                 var f = Font.CreateDynamicFontFromOSFont("Arial", 30);

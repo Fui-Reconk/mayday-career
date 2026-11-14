@@ -189,9 +189,9 @@ namespace MaydayCareer
                 "SaveSlots",
                 3,
                 new BepInEx.Configuration.ConfigDescription(
-                    "存档档位数（1-6）。档1 是主档 career.json（兼容旧档）；档2+ 各自是独立文件 career.slotN.json。\n" +
-                    "暂停菜单的「档位」按钮循环切换，存盘/读档/热键都作用于当前档位。",
-                    new BepInEx.Configuration.AcceptableValueRange<int>(1, 6)));
+                    "手动存档档位数（1-12，默认 3）。档1 是主档 career.json（兼容旧档）；档2+ 各自是独立文件 career.slotN.json。\n" +
+                    "选档界面里行多时会自动出现滚动条，滚轮 / 拖拽 / 滚动条都能用。",
+                    new BepInEx.Configuration.AcceptableValueRange<int>(1, 12)));
 
             ActiveSlot = Config.Bind(
                 "General",
