@@ -47,6 +47,7 @@ namespace MaydayCareer
         internal static ConfigEntry<bool> MenuButtons;
         internal static ConfigEntry<int> SaveSlots;
         internal static ConfigEntry<int> ActiveSlot;
+        internal static ConfigEntry<bool> ClearItemsOnNewRun;
 
         public override void Load()
         {
@@ -197,6 +198,14 @@ namespace MaydayCareer
                 "ActiveSlot",
                 1,
                 "上次使用的档位（菜单按钮切换时自动写回，一般不用手改）。");
+
+            ClearItemsOnNewRun = Config.Bind(
+                "General",
+                "ClearItemsOnNewRun",
+                true,
+                "新一轮重置 / 手动重开时清空上一局残留的物品，并重新生成一份全新的开局 kit。\n" +
+                "官方开新档不清场（社区反馈过的 bug），开着这项可以修掉；\n" +
+                "读档本身永远是精确还原（先清空再按存档重建），与这项无关。");
 
             LogSource.LogInfo("[MaydayCareer] 已加载 v" + Version);
 

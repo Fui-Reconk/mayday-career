@@ -101,6 +101,7 @@ namespace MaydayCareer
 
     /// <summary>
     /// 手动重开一轮时清除一次性标记，让读档可以再执行一次。
+    /// 同时清空上一轮残留的物品并补全新开局 kit。
     /// </summary>
     [HarmonyPatch]
     internal static class RestartHook
@@ -111,6 +112,9 @@ namespace MaydayCareer
         {
             CareerStore.ResetApplyFlag();
             if (Plugin.AutoLoadOnStart.Value) CareerStore.ApplyOnce();
+
+            try { CareerStore.ClearItemsOnRunReset("手动重开"); }
+            catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 手动重开清场异常: " + e); }
         }
     }
 
@@ -202,6 +206,10 @@ namespace MaydayCareer
         {
             try { CareerStore.EnsureSavedSeats("新一轮重置"); }
             catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 新一轮重置后补座排异常: " + e); }
+
+            // 官方开新档不清场：清掉上一局残留的物品，补一份全新开局 kit
+            try { CareerStore.ClearItemsOnRunReset("新一轮重置"); }
+            catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 新一轮重置清场异常: " + e); }
         }
     }
 

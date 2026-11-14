@@ -2353,8 +2353,12 @@ namespace MaydayCareer
         }
 
         /// <summary>
-        /// 按存档补物品。幂等：先数场景里已有的同 id 物品，只补差额，
-        /// 所以反复读档不会刷物品。
+        /// 按存档精确还原物品：先清空场景里所有可持久化物品，
+        /// 再按存档原样重建 —— 机舱最终状态 = 存档状态。
+        ///
+        /// 之前是"补差"（数已有同 id，只补缺的）：读档后场景里多出来的物品
+        /// （上一局残留、官方开新档不清场的 bug）永远留在机上，用户反馈
+        /// "读档时已有的物品不会消失"。清空+重建从根上解决。
         /// </summary>
         static void RestoreItems(List<ItemRecord> want)
         {
@@ -2363,22 +2367,16 @@ namespace MaydayCareer
             {
                 if (want == null || want.Count == 0) { _restorePending = false; return; }
 
+                // 清空 tracked 物品（手持物跳过 —— 玩家手里的东西不该被抽走）
+                ClearWorldItems("读档精确还原");
+
                 var sockets = IndexSockets();
-                var have = CountItemsById();
 
                 int ok = 0, spawnFail = 0, socketMiss = 0;
 
                 foreach (var r in want)
                 {
                     if (r == null || string.IsNullOrEmpty(r.id)) { continue; }
-
-                    // 已经有一件了 → 不重复生成
-                    if (have.TryGetValue(r.id, out var n) && n > 0)
-                    {
-                        have[r.id] = n - 1;
-                        ok++;
-                        continue;
-                    }
 
                     try
                     {
@@ -2457,30 +2455,72 @@ namespace MaydayCareer
             return map;
         }
 
-        /// <summary>场景里现有物品按 itemId 计数（不做过滤，宁可少补也不要重复）。</summary>
-        static Dictionary<string, int> CountItemsById()
+        /// <summary>
+        /// 清空场景里所有可持久化物品（分类白名单内、非手持）。
+        /// 用于读档精确还原和新一轮清场。手持物跳过 —— 玩家手里的东西不该被抽走。
+        /// </summary>
+        static int ClearWorldItems(string why)
         {
-            var map = new Dictionary<string, int>(StringComparer.Ordinal);
+            int n = 0;
             try
             {
                 var arr = UnityEngine.Object.FindObjectsOfType<global::Mayday.Item>();
-                if (arr == null) return map;
+                if (arr == null) return 0;
                 for (int i = 0; i < arr.Length; i++)
                 {
                     var it = arr[i];
                     if (it == null) continue;
-                    string id = null;
-                    try { id = it.itemId; } catch { }
-                    if (string.IsNullOrEmpty(id)) continue;
-                    map.TryGetValue(id, out var c);
-                    map[id] = c + 1;
+                    if (!IsPersistable(it)) continue;
+                    try { it.ServerDestroy(); n++; }
+                    catch (Exception e)
+                    {
+                        Plugin.LogSource.LogWarning("[MaydayCareer] 删除物品失败（" + why + "）: " + e.Message);
+                    }
                 }
             }
             catch (Exception e)
             {
-                Plugin.LogSource.LogWarning("[MaydayCareer] 统计现有物品失败: " + e.Message);
+                Plugin.LogSource.LogWarning("[MaydayCareer] 清空物品异常（" + why + "）: " + e.Message);
             }
-            return map;
+            if (n > 0) Plugin.LogSource.LogInfo("[MaydayCareer] 已清空 " + n + " 件物品（" + why + "）");
+            return n;
+        }
+
+        /// <summary>
+        /// 新一轮 / 手动重开时清场：删掉上一局残留的可持久化物品，
+        /// 再让 ServiceDirector 补一份全新的开局 kit。
+        ///
+        /// 背景：官方开新档不清场（社区用户也反馈过），旧物品会一直躺在机上。
+        /// kit 用 ServerSpawnKit(false) 重新生成 —— 官方自己的逻辑，
+        /// 会走"starting kit: 32 spawned"那条路。
+        /// 配置 ClearItemsOnNewRun 控制（默认开）。
+        /// </summary>
+        public static void ClearItemsOnRunReset(string why)
+        {
+            if (!Plugin.ClearItemsOnNewRun.Value) return;
+            try
+            {
+                int removed = ClearWorldItems(why);
+                if (removed <= 0) return; // 本来就干净，别去动 kit
+
+                try
+                {
+                    var sd = UnityEngine.Object.FindObjectOfType<global::Mayday.Service.ServiceDirector>();
+                    if (sd != null)
+                    {
+                        sd.ServerSpawnKit(false);
+                        Plugin.LogSource.LogInfo("[MaydayCareer] 已重新生成开局 kit（" + why + "）");
+                    }
+                }
+                catch (Exception e)
+                {
+                    Plugin.LogSource.LogWarning("[MaydayCareer] 重新生成开局 kit 失败（" + why + "）: " + e.Message);
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.LogSource.LogWarning("[MaydayCareer] 新一轮清场异常（" + why + "）: " + e.Message);
+            }
         }
 
         static global::Mayday.Item SpawnOne(ItemRecord r)
