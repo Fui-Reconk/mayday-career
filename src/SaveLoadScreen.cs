@@ -93,8 +93,28 @@ namespace MaydayCareer
         {
             if (_root != null) { try { return; } catch { } _root = null; } // Unity 假 null（场景切换销毁）→ 重建
 
+            try
+            {
+                BuildNow();
+            }
+            catch (Exception e)
+            {
+                // 半途而废的残骸必须清干净：_root 若留着，下次 Open 会拿
+                // "有 Canvas 没 Title"的半成品去 NRE。清掉后下次完整重建。
+                try { if (_root != null) UnityEngine.Object.Destroy(_root); } catch { }
+                _root = null;
+                _title = null;
+                _rows.Clear();
+                _builtRows = -1;
+                throw;
+            }
+        }
+
+        static void BuildNow()
+        {
             _rows.Clear();
             _builtRows = -1;
+            Plugin.LogSource.LogInfo("[MaydayCareer] 构建选档界面…");
 
             var rootGo = new GameObject("MaydayCareerSaveLoad");
             _root = rootGo;
@@ -107,27 +127,29 @@ namespace MaydayCareer
             scaler.referenceResolution = new Vector2(RefW, RefH);
             scaler.matchWidthOrHeight = 0.5f;
             rootGo.AddComponent<GraphicRaycaster>();
+            Plugin.LogSource.LogInfo("[MaydayCareer] 构建选档界面: canvas ok");
 
-            var rt = rootGo.transform as RectTransform;
+            var rt = rootGo.transform.TryCast<UnityEngine.RectTransform>();
             Stretch(rt);
 
             // 四周暗幕：点击即关闭
             var dim = NewImage(rt, "Dim", new Color(0f, 0f, 0f, 0.78f));
-            Stretch(dim.transform as RectTransform);
+            Stretch(dim.transform.TryCast<UnityEngine.RectTransform>());
             var dimBtn = dim.AddComponent<Button>();
             dimBtn.onClick.AddListener(Wrap(Close));
 
             // 面板本体
             float panelH = 300f + CareerStore.SlotCount * RowStep;
             var panel = NewImage(rt, "Panel", new Color(0.12f, 0.14f, 0.19f, 0.985f));
-            var prt = panel.transform as RectTransform;
+            var prt = panel.transform.TryCast<UnityEngine.RectTransform>();
             prt.sizeDelta = new Vector2(980f, panelH);
 
             Font font = GetCjkFont();
+            Plugin.LogSource.LogInfo("[MaydayCareer] 构建选档界面: 面板+字体 ok（font=" + (font != null ? font.name : "null") + "）");
 
             // 标题
             _title = NewText(panel.transform, "Title", "", font, 34, Color.white);
-            var trt = _title.transform as RectTransform;
+            var trt = _title.transform.TryCast<UnityEngine.RectTransform>();
             trt.anchoredPosition = new Vector2(0f, panelH / 2f - 75f);
             trt.sizeDelta = new Vector2(940f, 60f);
 
@@ -138,7 +160,7 @@ namespace MaydayCareer
             {
                 int slot = i + 1; // 闭包捕获：必须是局部变量
                 var rowGo = NewImage(panel.transform, "Slot" + slot, new Color(0.20f, 0.23f, 0.31f, 1f));
-                var rrt = rowGo.transform as RectTransform;
+                var rrt = rowGo.transform.TryCast<UnityEngine.RectTransform>();
                 rrt.sizeDelta = new Vector2(900f, RowH);
                 rrt.anchoredPosition = new Vector2(0f, panelH / 2f - 145f - i * RowStep);
 
@@ -156,7 +178,7 @@ namespace MaydayCareer
                 };
 
                 var label = NewText(rowGo.transform, "Label", "", font, 30, new Color(0.92f, 0.94f, 0.98f, 1f));
-                var lrt = label.transform as RectTransform;
+                var lrt = label.transform.TryCast<UnityEngine.RectTransform>();
                 Stretch(lrt);
                 label.alignment = TextAnchor.MiddleCenter;
 
@@ -167,17 +189,18 @@ namespace MaydayCareer
 
             // 关闭按钮
             var closeGo = NewImage(panel.transform, "Close", new Color(0.35f, 0.38f, 0.45f, 1f));
-            var crt = closeGo.transform as RectTransform;
+            var crt = closeGo.transform.TryCast<UnityEngine.RectTransform>();
             crt.sizeDelta = new Vector2(220f, 64f);
             crt.anchoredPosition = new Vector2(0f, -(panelH / 2f - 62f));
             var closeBtn = closeGo.AddComponent<Button>();
             closeBtn.targetGraphic = closeGo.GetComponent<Image>();
             var clabel = NewText(closeGo.transform, "Label", "关闭", font, 30, Color.white);
-            Stretch(clabel.transform as RectTransform);
+            Stretch(clabel.transform.TryCast<UnityEngine.RectTransform>());
             clabel.alignment = TextAnchor.MiddleCenter;
             closeBtn.onClick.AddListener(Wrap(Close));
 
             rootGo.SetActive(false); // 构建完先藏起来，Open 再亮
+            Plugin.LogSource.LogInfo("[MaydayCareer] 构建选档界面: 完成（" + n + " 行）");
         }
 
         /// <summary>行为委托 → UnityAction（UnityEvent.AddListener 的参数类型）。</summary>
@@ -253,7 +276,7 @@ namespace MaydayCareer
             go.transform.SetParent(parent, false);
             var img = go.AddComponent<Image>();
             img.color = color;
-            var rt = go.transform as RectTransform;
+            var rt = go.transform.TryCast<UnityEngine.RectTransform>();
             rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
             rt.anchoredPosition = Vector2.zero;
             return go;
@@ -272,7 +295,7 @@ namespace MaydayCareer
             t.horizontalOverflow = HorizontalWrapMode.Overflow;
             t.verticalOverflow = VerticalWrapMode.Overflow;
             t.raycastTarget = false;
-            var rt = go.transform as RectTransform;
+            var rt = go.transform.TryCast<UnityEngine.RectTransform>();
             rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
             rt.anchoredPosition = Vector2.zero;
             return t;
