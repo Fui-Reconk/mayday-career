@@ -311,7 +311,7 @@ dotnet run Inspector.cs "C:\...\BepInEx\interop\Assembly-CSharp.dll" find "FuelL
 
 ## 常见问题
 
-**Q：`补丁数` 不是 8**
+**Q：`补丁数` 不是 9**
 
 说明有补丁没挂上。游戏更新改了方法名，需要重新编译（见 [从源码构建](#从源码构建)）。日志里搜 `MaydayCareer` 能看到具体的失败信息。
 
