@@ -471,15 +471,23 @@ namespace MaydayCareer
 
         // ---------- 多档位 ----------
         //
+        // 档0 = career.autosave.json（自动存档专用文件，落地/周转时自动写入，
+        //       手动不可写、选档界面里灰显；读档模式可选它回滚到"上次落地"）
         // 档1 = career.json（主档，兼容旧档、旧流程与已发布的说明）；
         // 档2+ = career.slotN.json（独立文件，备份同理 career.slotN.bak.json）。
-        // 所有读写（含热键）都作用在"当前档位"上；档位由暂停菜单的
-        // 「档位」按钮循环切换，选择持久化在 BepInEx 配置的 ActiveSlot 里。
+        //
+        // 所有手动读写（含热键）都作用在"当前档位"上；档位在选档界面
+        // 点行决定，选择持久化在 BepInEx 配置的 ActiveSlot 里。
+        // 自动流程只写档0，永远不会碰手动槽位 —— 之前"新公司落地自动存盘
+        // 抹掉真档"的事故从结构上不再可能。
         //
         // GuardSave 的"存档是第几段"缓存按档位各存一份：切档后首次
         // 存盘会对新档位做一次文件预读，之后走内存。
+        // 档0 不参与 GuardSave（它是滚动检查点，本意就是每次落地覆盖）。
         static int _activeSlot = 1;
         public static int ActiveSlot => _activeSlot;
+
+        public const int AutoSlot = 0;
 
         public static int SlotCount => Math.Max(1, Math.Min(6, Plugin.SaveSlots?.Value ?? 3));
 
@@ -490,7 +498,7 @@ namespace MaydayCareer
 
         /// <summary>
         /// 档位的展示信息（选档界面用）：存档时间 + 段数 + 金钱。
-        /// 文件不存在返回 null（界面显示"空"）。
+        /// 文件不存在返回 null（界面显示"空"）。slot 0 = 自动存档。
         /// </summary>
         public static string SlotInfo(int slot)
         {
@@ -507,14 +515,16 @@ namespace MaydayCareer
 
         static string FileFor(int slot)
         {
-            return slot <= 1
+            if (slot == AutoSlot) return Path.Combine(_dir, "career.autosave.json");
+            return slot == 1
                 ? Path.Combine(_dir, "career.json")
                 : Path.Combine(_dir, "career.slot" + slot + ".json");
         }
 
         static string BakFor(int slot)
         {
-            return slot <= 1
+            if (slot == AutoSlot) return Path.Combine(_dir, "career.autosave.bak.json");
+            return slot == 1
                 ? Path.Combine(_dir, "career.bak.json")
                 : Path.Combine(_dir, "career.slot" + slot + ".bak.json");
         }
@@ -525,7 +535,7 @@ namespace MaydayCareer
         {
             _dir = ResolveDir();
             Plugin.LogSource.LogInfo("[MaydayCareer] 存档路径 = " + FileFor(1)
-                + "（档位数 = " + SlotCount + "）");
+                + "（手动档位数 = " + SlotCount + "，自动存档 = " + FileFor(AutoSlot) + "）");
         }
 
         static string ResolveDir()
@@ -580,37 +590,57 @@ namespace MaydayCareer
             return cache[slot];
         }
 
+        /// <summary>
+        /// 自动存档（落地/周转/坠机检查点）：写入独立的 career.autosave.json。
+        /// 与手动槽位完全隔离 —— 自动流程永远不碰档1..N，
+        /// "新公司落地自动存盘抹掉真档"的事故从结构上不可能。
+        /// 自动存档是滚动检查点，没有 GuardSave（本意就是每次落地覆盖）。
+        /// 调用点（阶段机）不关心结果。
+        /// </summary>
+        public static void AutoSave()
+        {
+            SaveToSlot(AutoSlot, guard: false);
+        }
+
+        /// <summary>手动存盘（热键 J）：写当前档位，GuardSave 照常拦截。</summary>
         public static void Save()
         {
-            // 自动存盘的调用点（阶段机）不关心结果；返回值给手动入口用
-            TrySave();
+            SaveToSlot(_activeSlot, guard: true);
         }
 
         /// <summary>
-        /// 尝试存盘。返回 null = 已提交写盘（后台线程完成落盘）；
+        /// 尝试存盘到当前档位。返回 null = 已提交写盘（后台线程完成落盘）；
         /// 返回字符串 = 跳过原因（GameState 未就绪 / GuardSave 拦截）。
         /// 菜单按钮用返回值在 toast 里如实告知用户，不能静默返回——
         /// 之前按钮误报"已存盘"，实际被 GuardSave 拦了，用户以为存的逻辑没生效。
         ///
         /// manual=true 跳过 GuardSave：选档界面里点行覆盖是带二次确认的明确操作，
         /// 不该被自动拦截（v1.3.0 用户反馈"低档覆盖的去了吧"）。
-        /// 拦截保留给没有确认环节的路径：自动存盘（Arrived/Turnaround）与热键 ——
-        /// 新公司落地自动存盘仍然不能抹掉真档。
+        /// 拦截保留给没有确认环节的路径：热键 J。
         /// </summary>
         public static string TrySave(bool manual = false)
+        {
+            return SaveToSlot(_activeSlot, guard: !manual);
+        }
+
+        /// <summary>
+        /// 实际的存盘入口：slot 0 = 自动存档文件，1..N = 手动档位。
+        /// guard=true 时应用 GuardSave 段数回退保护（仅手动档位有意义）。
+        /// 主线程只做状态读取与 JSON 序列化，写盘在后台线程。
+        /// </summary>
+        static string SaveToSlot(int slot, bool guard)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
             var gs = global::Mayday.GameState.Instance;
             if (gs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] GameState 为空，跳过存盘"); return "GameState 未就绪，跳过存盘"; }
 
-            int slot = _activeSlot;
-
             // 档位回退保护：刚启动时游戏总是从「第 0 段、600 块」的新公司开始，
             // 这时候按 J 就会把真进度抹成初始值（实测踩过：钱 1300 -> 600）。
             // 当前局比存档更早，就跳过并提示，让用户先读档。
             // leg 从内存缓存取（按档位），不再整文件重读。
-            if (!manual && Plugin.GuardSave.Value)
+            // 自动存档（slot 0）不适用 —— 它是滚动检查点。
+            if (guard && slot != AutoSlot && Plugin.GuardSave.Value)
             {
                 int savedLeg = GetCachedSavedLeg(slot);
                 if (savedLeg > gs.Leg)
@@ -667,10 +697,13 @@ namespace MaydayCareer
             // CS0656（NullableAttribute 构造器不可见）。改用自定义委托 +
             // 单消费者写盘线程，类型绑定完全落在自己程序集里。
             string json = s.ToJson();
-            var cache = EnsureLegCache();
-            if (slot < cache.Length) cache[slot] = gs.Leg;
+            if (slot > 0)
+            {
+                var cache = EnsureLegCache();
+                if (slot < cache.Length) cache[slot] = gs.Leg;
+            }
             string snapshot =
-                "[档" + slot + "] 钱=" + s.money + " 债=" + s.debt + " 第" + s.leg + "段 升级=" + s.upgrades.Count +
+                "[" + (slot == AutoSlot ? "自动" : "档" + slot) + "] 钱=" + s.money + " 债=" + s.debt + " 第" + s.leg + "段 升级=" + s.upgrades.Count +
                 " 座排=" + s.seatRows.Count + " 物品=" + s.items.Count;
 
             lock (_ioLock)
@@ -876,19 +909,35 @@ namespace MaydayCareer
             Apply();
         }
 
+        /// <summary>读当前档位（热键 F9 / AutoLoadOnStart 用）。</summary>
         public static void Apply()
         {
-            var s = Load();
+            ApplySlot(_activeSlot);
+        }
+
+        /// <summary>
+        /// 读指定档位并应用到当前进度。slot 0 = 自动存档（选档界面用，
+        /// 回滚到"上次落地状态"）。手动档位会刷新 GuardSave 的 leg 缓存；
+        /// 自动档不刷新（它不是手动槽位语义）。
+        /// </summary>
+        public static void ApplySlot(int slot)
+        {
+            _applied = true; // 手动读过档后，PreShift 的 ApplyOnce 不再重复应用
+            var s = LoadFrom(FileFor(slot));
             if (s == null) return;
 
-            var legCache = EnsureLegCache();
-            if (_activeSlot < legCache.Length) legCache[_activeSlot] = s.leg; // GuardSave 直接用内存值，不再重读盘
+            if (slot > 0)
+            {
+                var legCache = EnsureLegCache();
+                if (slot < legCache.Length) legCache[slot] = s.leg; // GuardSave 直接用内存值，不再重读盘
+            }
 
             var gs = global::Mayday.GameState.Instance;
             if (gs == null) { Plugin.LogSource.LogWarning("[MaydayCareer] GameState 为空，无法读档"); return; }
             _savedLeg = s.leg;
 
-            Plugin.LogSource.LogInfo("[MaydayCareer] 本次读的是档" + _activeSlot + "（" + Path.GetFileName(FilePath) + "）");
+            Plugin.LogSource.LogInfo("[MaydayCareer] 本次读的是"
+                + (slot == AutoSlot ? "自动存档（" + FileFor(AutoSlot) + "）" : "档" + slot + "（" + Path.GetFileName(FileFor(slot)) + "）"));
 
             // 旧存档必须显式喊出来。
             // 否则表现是"读档成功、座位重建补装0排、物品重建目标0件" ——

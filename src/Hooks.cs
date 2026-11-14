@@ -17,7 +17,7 @@ namespace MaydayCareer
         private static void Postfix()
         {
             if (!Plugin.AutoSave.Value) return;
-            try { CareerStore.Save(); }
+            try { CareerStore.AutoSave(); }
             catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 存盘异常: " + e); }
         }
     }
@@ -33,7 +33,7 @@ namespace MaydayCareer
         private static void Postfix()
         {
             if (!Plugin.AutoSave.Value) return;
-            try { CareerStore.Save(); }
+            try { CareerStore.AutoSave(); }
             catch (System.Exception e) { Plugin.LogSource.LogError("[MaydayCareer] 存盘异常: " + e); }
         }
     }
@@ -79,7 +79,7 @@ namespace MaydayCareer
                     // 落地 / 下一段周转：都是成功飞行之后，可以安全存盘。
                     case global::Mayday.Airport.DirectorStage.Arrived:
                     case global::Mayday.Airport.DirectorStage.Turnaround:
-                        if (Plugin.AutoSave.Value) CareerStore.Save();
+                        if (Plugin.AutoSave.Value) CareerStore.AutoSave();
                         break;
 
                     // 坠机轮结束：默认不存。
@@ -87,7 +87,7 @@ namespace MaydayCareer
                     // 在这里存盘等于把"一轮作废"改成"检查点"，而且会当场污染下一轮。
                     // 想让坠机也计入生涯的，把配置里的 SaveOnCrash 打开。
                     case global::Mayday.Airport.DirectorStage.GameOver:
-                        if (Plugin.AutoSave.Value && Plugin.SaveOnCrash.Value) CareerStore.Save();
+                        if (Plugin.AutoSave.Value && Plugin.SaveOnCrash.Value) CareerStore.AutoSave();
                         else Plugin.LogSource.LogInfo("[MaydayCareer] 坠机，按设置不覆盖存档");
                         break;
                 }
