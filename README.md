@@ -1,6 +1,6 @@
 # Mayday Career
 
-《Mayday Airways》的跨局进度存档插件 —— 每趟航班结束后把公司状态落成一份 JSON，下次启动接着上次飞。
+《Mayday Airways》的跨局进度存档插件 —— 把公司状态落成多份 JSON 存档（主档 + 手动档 + 自动存档），下次启动接着上次飞。暂停菜单里有 galgame 式选档界面，也有热键可用。
 
 [快速开始](#快速开始) · [安装](#安装) · [配置](#配置) · [存档](#存档文件) · [从源码构建](#从源码构建) · [常见问题](#常见问题) · [逆向笔记](docs/FINDINGS.md) · [参与开发](CONTRIBUTING.md) · [更新记录](CHANGELOG.md) · [发布包](https://github.com/Fui-Reconk/mayday-career/releases/latest)
 
@@ -12,7 +12,7 @@
 
 游戏唯一持久化的是设置和装扮（`settings.json` / `ui_hints.json`）。
 
-这个插件把上面那些状态写进 `career.json`，下次进游戏按一个键读回来。
+这个插件把上面那些状态写进存档文件（多档位 + 独立自动存档），下次进游戏从暂停菜单的选档界面读回来，或者按热键。
 
 **不改动游戏任何文件**，删掉插件即完全复原。
 
@@ -32,7 +32,7 @@
 | 发动机 | 每台的 `state` / `faults` / `rpm` / `cowl` / 机油量 |
 | 机体损伤 | `HullSystem` per-panel：每块面板的损伤/脏污/破洞/补丁进度 + 区段维修阶段（`sStage`/`sProg`） |
 | 机翼掉漆 | `shownMain/shownAccent` 外观链 + `paintCover`/`coverDamage`，写回后调 `ApplyAllSectionPaint` 重绘 |
-| 客舱器材 | 场景里实体物品的完整快照，按 socket 层级路径找回原位 |
+| 客舱器材 | 场景里实体物品的完整快照，按 socket 层级路径找回原位；读档为**精确还原**（先清空再按存档重建，多余的物品会消失） |
 
 ### 不保存
 
@@ -98,37 +98,45 @@ BepInEx\plugins\MaydayCareer.dll
 重新启动游戏。日志（`BepInEx\LogOutput.log`）里应该出现：
 
 ```
-[MaydayCareer] 已加载 v1.1.2
+[MaydayCareer] 已加载 v1.3.2
 [MaydayCareer] 存档路径 = C:\Users\<你>\AppData\LocalLow\Lyngo Games\Mayday Airways\career.json
-[MaydayCareer] 补丁数 = 8
+[MaydayCareer] 补丁数 = 13
 ```
 
-`补丁数 = 8` 是关键 —— 小于 8 说明 Harmony 有补丁没挂上，通常是游戏版本变了。
+补丁数随版本增加（v1.3.2 为 13），关键是**和最近一次启动的日志一致** —— 对不上说明 Harmony 有补丁没挂上，通常是游戏版本变了。
 
 ## 快速开始
 
 1. 进游戏，**走进机舱**（主菜单里 `GameState` 还没建）
-2. 按 `J` —— 存一份档
-3. 下次进来按 `F9` —— 读回来
+2. 按 `ESC` 打开暂停菜单 → 点「存盘」→ 选档界面里点一个档位
+3. 下次进来：ESC →「读档」→ 点同一个档位；或直接按 `F9` 读"当前档位"
 
-两个键都能在配置里改，见 [配置](#配置)。
+也可以用热键：`J` 存 / `F9` 读，见 [配置](#配置)。
 
 ## 使用
+
+### 暂停菜单与选档界面
+
+按 `ESC` 打开暂停菜单，底部有「存盘 / 读档」两个按钮（样式与游戏原按钮一致）：
+
+- 点「存盘」→ 弹出选档界面，列出行：**自动存档**（落地时自动更新，不可手动写）+ 档位 1~N
+- 每行显示该档的存档时间 / 段数 / 金钱
+- 点行即写入 / 读取；**覆盖已有存档会要求二次确认**（行变橙色，再点一次执行，上一份自动留成 `.bak`）
+- `ESC` / 底部「关闭」/ 点击暗幕 退出选档界面（ESC 只关选档界面，暂停菜单保留）
+- 结果用游戏自带的通知条反馈
 
 ### 热键
 
 | 键 | 配置项 | 默认 | 说明 |
 |---|---|---|---|
-| 存盘 | `SaveKey` | `J` | 立刻写一份，不用飞完一趟 |
-| 读档 | `LoadKey` | `F9` | 把存档覆盖到当前进度 |
+| 存盘 | `SaveKey` | `J` | 立刻写一份到**当前档位**，不用飞完一趟 |
+| 读档 | `LoadKey` | `F9` | 把**当前档位**覆盖到当前进度 |
 
 键名取 `UnityEngine.InputSystem.Key` 的枚举名（`F9` / `F10` / `K` / `L` …）。
+"当前档位" = 选档界面里最后点过的那个手动档。
 
 > `J` 是"现在这样就挺好，记下来"，`F9` 是"回到上次记下来的那一步"。
 > **读档是覆盖操作**，按之前想清楚 —— 好在每次写盘都会把上一份留成备份。
-
-不习惯热键的话，按 `ESC` 打开暂停菜单，里面也有「存盘 / 读档」两个按钮
-（样式与游戏原按钮一致，点完会弹游戏自带的通知条）。不需要时把 `MenuButtons` 设为 `false`。
 
 ### 自动存盘的时机
 
@@ -193,14 +201,14 @@ BepInEx\config\local.mayday.career.cfg
 
 ### 几个配置的细节
 
-**`GuardSave`** —— 游戏每次启动都从"第 0 段、600 块"的新公司开始。要是这时候先按了 `J`，存档就会被初始值覆盖。开了这个开关，插件发现当前段数比存档早，会拒绝写盘：
+**`GuardSave`** —— 游戏每次启动都从"第 0 段、600 块"的新公司开始。要是这时候按了 `J`（热键），存档就会被初始值覆盖。开了这个开关，插件发现当前段数比存档早，会拒绝写盘：
 
 ```
-[Warning] 存盘已跳过：当前是第0段，存档是第3段（更靠后）。
+[Warning] 存盘已跳过（档1）：当前是第0段，档1是第3段（更靠后）。
           刚开的新公司别急着存盘，先按读档键把进度拿回来。
 ```
 
-想强行覆盖（比如真的想重开一家新公司），把它设成 `false`。
+拦截只对**没有确认环节的路径**生效（热键 J 与自动存档；自动存档写独立文件，另有一层结构隔离）。选档界面里的覆盖有二次确认，不受此限。想连热键也放开，把它设成 `false`。
 
 **`ClearBeforeLoad`** —— 正常情况下不用动。如果发现读档后钱正好是"存档金额 + 开局资金"，把它改成 `true`。
 
@@ -212,17 +220,21 @@ BepInEx\config\local.mayday.career.cfg
 
 ```
 %USERPROFILE%\AppData\LocalLow\Lyngo Games\Mayday Airways\
-├─ career.json        主存档
-├─ career.bak.json    上一份（每次写盘前自动生成）
-├─ settings.json      游戏自己的设置，与本插件无关
-└─ ui_hints.json      游戏自己的教程记录
+├─ career.json             主档（手动档 1）
+├─ career.bak.json         主档的上一份（每次写盘前自动生成）
+├─ career.autosave.json    自动存档（落地 / 周转时自动写入）
+├─ career.slot2.json       手动档 2（SaveSlots ≥ 2 时存在）
+├─ career.slot2.bak.json   档 2 的上一份
+├─ career.slotN.json       … 依 SaveSlots 而定（最多 12）
+├─ settings.json           游戏自己的设置，与本插件无关
+└─ ui_hints.json           游戏自己的教程记录
 ```
 
 和游戏的用户数据放在一起，换机迁移、Steam 云备份都走同一套逻辑。
 
 ### 格式
 
-4 空格缩进、camelCase、带 `version` 字段，风格与游戏自己的 `settings.json` 一致：
+4 空格缩进、camelCase、带 `version` 字段，风格与游戏自己的 `settings.json` 一致。所有档位文件（含自动存档）共用同一格式：
 
 ```json
 {
@@ -252,9 +264,11 @@ BepInEx\config\local.mayday.career.cfg
 
 | 想做的事 | 怎么做 |
 |---|---|
-| 回到上一份 | 把 `career.bak.json` 改名成 `career.json` |
+| 回到上次落地状态（坠机救回） | 选档界面 → 读档 → 点「自动存档」行 |
+| 切换 / 新建档位 | 选档界面里点对应行存一份 |
+| 回到某档的上一份 | 把 `career.slotN.bak.json` 改名成 `career.slotN.json` |
 | 重开新公司 | 删掉 `career.json` |
-| 手动改钱 | 编辑 `"money"` 的值，进游戏按读档键 |
+| 手动改钱 | 编辑档文件里的 `"money"`，进游戏读该档 |
 | 看内容 | `notepad "%USERPROFILE%\AppData\LocalLow\Lyngo Games\Mayday Airways\career.json"` |
 
 改 JSON 时保持缩进和逗号格式即可，插件用的是标准解析器。
@@ -284,7 +298,10 @@ mayday-career\
 │  ├─ MaydayCareer.csproj   引用 BepInEx 与 interop
 │  ├─ Plugin.cs             入口、配置项
 │  ├─ Hooks.cs              Harmony 补丁（阶段机、重置、重锚、每帧）
-│  ├─ CareerStore.cs        存档读写、物品重建、座排维护
+│  ├─ CareerStore.cs        多档位存档读写、物品精确还原、座排维护
+│  ├─ MenuButtons.cs        暂停菜单存读按钮（克隆原按钮注入）
+│  ├─ SaveLoadScreen.cs     galgame 式选档界面（自研滚动 + ESC 拦截）
+│  ├─ PerfWatch.cs          帧时间监测
 │  ├─ Hotkey.cs             热键轮询
 │  └─ Json.cs               手写的极简 JSON（BepInEx 运行时没有 System.Text.Json）
 ├─ tools\interop-inspector\ 离线解析 interop 程序集的字段表
@@ -360,10 +377,14 @@ dotnet run Inspector.cs "C:\...\BepInEx\interop\Assembly-CSharp.dll" find "FuelL
 ## 已知限制
 
 - 物品只存客舱 / 货舱里的**实体**，行李和手持物不存
+- 读档为**精确还原**：先清空场景里的可持久化物品再按存档重建，所以读档会清掉你本局新买的、存档里没有的器材（读档前想保留就先存一份）
+- 多人时其他玩家**手里拿着的**物品不会被清（避免从手中抽走），读档后可能出现同 id 的手上物 + 存档物并存
+- 升级台账会精确回退（本局多买的会被移除）；但**座排没有卸载 API**，读"排数更少"的档时多装的排不会消失
 - 物品的 `tag` 只记录不还原 —— 那是运行时网络句柄，重新生成必然是新值
 - 发动机保证 `state` / `faults` 准确；机油量已验证能留住，温度等纯模拟量会在几秒内回归正常值
 - 机翼掉漆走的是完整外观链（`shownMain/shownAccent` + `paintCover/coverDamage`），写回后调 `ApplyAllSectionPaint` + `MarkAllDirty` 重绘。若日志出现 `写 holes 失败`，说明当前 interop 版本对 `SyncList<Vector4>` 索引器支持有问题 —— 损伤与掉漆仍会还原，只是洞的位置可能不在原处
 - 机体状态有一道前置门：`HullSystem.serverReady` 且 `holes/damage/dirt` 的 Count 等于面板数。没就绪时读档会跳过机体部分（日志会说明原因），等一轮结算后再读即可
+- 跨机场读档（存档机场 ≠ 当前机场）会触发游戏重建世界，物品还原自动等重建完成后补一次 —— 日志里能看到"等重锚后再还原一次"
 - 多人时只有房主存读
 - 游戏更新后如果方法名或字段结构变化，需要重新编译
 
@@ -377,6 +398,8 @@ dotnet run Inspector.cs "C:\...\BepInEx\interop\Assembly-CSharp.dll" find "FuelL
 BepInEx\config\local.mayday.career.cfg
 %USERPROFILE%\AppData\LocalLow\Lyngo Games\Mayday Airways\career.json
 %USERPROFILE%\AppData\LocalLow\Lyngo Games\Mayday Airways\career.bak.json
+%USERPROFILE%\AppData\LocalLow\Lyngo Games\Mayday Airways\career.autosave.json
+%USERPROFILE%\AppData\LocalLow\Lyngo Games\Mayday Airways\career.slot*.json（含 .bak）
 ```
 
 游戏本体从未被修改，所以不需要"还原"。
@@ -389,17 +412,23 @@ BepInEx\config\local.mayday.career.cfg
 
 ```
 GameState.ServerResetRun          读档时机
-GameDirector.SetStage             阶段机（存盘 / 读档）
+GameDirector.SetStage             阶段机（自动存档 / 读档）
 GameDirector.ServerRestartRun     重开一轮
-GroundCrew.ServerReanchor         站点重锚
-PassengerDirector.ServerResetForNewRun   座排自愈
-Mirror.NetworkManager.Update      热键轮询
+GroundCrew.ServerReanchor         站点重锚（跨机场读档后的物品补还原）
+PassengerDirector.ServerResetForNewRun   座排自愈 / 新公司清场
+PassengerDirector.rowMask         座排位图
+Mirror.NetworkManager.Update      热键与 ESC 轮询
+UIRoot.HandleBack / Update        ESC 拦截（选档界面开着时）
+UIScreen.Back / Close / CloseInstant  ESC 拦截（暂停菜单保持）
+ServiceDirector.ServerSpawnKit    新公司开局 kit 重生成
 FuelSystem.tank / EngineUnit.lOil 燃油与发动机
 HullSystem.serverReady / .Count   机体快照的前置判据
 HullSystem.damage/dirt/holes      机体损伤（per-panel）
 HullSystem.shownMain/shownAccent  机翼掉漆（外观链）
 HullSystem.ApplyAllSectionPaint   掉漆重绘入口（私有，反射调用）
 HullSystem.MarkAllDirty           材质脏标记（私有，反射调用）
+GameState.Upgrades                升级台账（SyncList，回退用 RemoveAt）
+Item.ServerSpawn / ServerDestroy  物品重建与精确还原
 ```
 
 任何一个改名都会让对应的功能静默失效（有 try/catch 兜底，不会崩游戏），日志里能看到。
