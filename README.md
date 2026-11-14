@@ -98,7 +98,7 @@ BepInEx\plugins\MaydayCareer.dll
 重新启动游戏。日志（`BepInEx\LogOutput.log`）里应该出现：
 
 ```
-[MaydayCareer] 已加载 v1.1.0
+[MaydayCareer] 已加载 v1.1.2
 [MaydayCareer] 存档路径 = C:\Users\<你>\AppData\LocalLow\Lyngo Games\Mayday Airways\career.json
 [MaydayCareer] 补丁数 = 8
 ```
@@ -394,6 +394,7 @@ HullSystem.MarkAllDirty           材质脏标记（私有，反射调用）
 - [BepInEx](https://github.com/BepInEx/BepInEx) —— IL2CPP 插件框架
 - [HarmonyX](https://github.com/BepInEx/HarmonyX) —— 运行时方法补丁
 - [CHmadoka/more_players](https://github.com/CHmadoka/more_players) —— 同款游戏的人数扩展 mod，本项目参考了它的工程结构和风险提示写法
+- [LS3213/Mayday-Mod-Manager](https://github.com/LS3213/Mayday-Mod-Manager) —— 同游戏的模组管理器与存档模组。v1.1.0 的机体损伤/掉漆字段映射参考了它的发布文档与反编译产物（仅学习方法，未复制代码）
 
 ## 许可证
 
